@@ -65,6 +65,8 @@ npm test
 
 ## 公開
 
-GitHub Pages用ワークフローは手動実行です。修正版コアを取り込み、リポジトリのSettings → PagesでGitHub Actionsを選んで実行します。独自ドメインは同じ設定画面で指定します。ドメイン名はまだ未指定です。
+[公開サイト](https://markn2000.github.io/codec-compare/)（GitHub Pages）。リポジトリは公開設定です。
+
+更新時はGitHub Actionsの「GitHub Pagesへ公開」を手動実行します。テストとビルドに成功した成果物を公開します。独自ドメインはSettings → Pagesで指定します。ドメイン名はまだ未指定です。
 
 音声コアのライセンス文書はビルド成果物の `licenses/` に含め、サイトにも同梱します。ライブラリのソースとビルド手順は `scripts/core.Dockerfile` を参照してください。
