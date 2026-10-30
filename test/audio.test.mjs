@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { CODECS, defaults, encodeArgs, commonFilter, chunkArgs, samePreview, metrics, validateConfig } from '../model.js';
+import { Player } from '../audio.js';
 
 test('基準PCM・設定・サイズ計算', () => {
   const source = { rate: 44100, channels: 2, frames: 441000, duration: 10 };
@@ -76,4 +77,51 @@ test('配布するWASMで7形式を生成し、区間復号と24 bit一致を検
     core.FS.unlink('/whole');
     core.FS.unlink(output);
   }
+});
+
+test('再生中の切替で位置を保ち、2パターンを重ねず、シークで古い復号を捨てる', async () => {
+  const started = [], stopped = [];
+  const context = {
+    sampleRate: 48000, currentTime: 0, destination: {},
+    resume: async () => {}, close: () => {},
+    createGain: () => ({ connect() {}, disconnect() {}, gain: { value: 1, cancelScheduledValues() {}, setValueAtTime() {}, linearRampToValueAtTime() {} } }),
+    createBufferSource: () => ({ connect() {}, disconnect() {}, start(...args) { started.push(args); }, stop(at) { stopped.push(at); } }),
+  };
+  const player = new Player(() => {}, error => { throw error; });
+  clearInterval(player.timer);
+  try {
+    player.context = context;
+    player.setSource({ duration: 60, rate: 48000, channels: 2, file: {} });
+    player.decode = async (target, start) => {
+      const chunk = { key: target.key, start, end: start + 48000 * 8, buffer: {} };
+      player.cache.push(chunk);
+      return chunk;
+    };
+    await player.play();
+    await new Promise(setImmediate);
+    assert.equal(player.buffering, false);
+    assert.equal(started.length, 2, '現在と次区間を隙間なく予約');
+    assert.equal(started[1][0], started[0][0] + started[0][2]);
+    context.currentTime = 3;
+    const before = player.position;
+    player.select({ id: 'mp3', config: { codec: 'mp3', channels: 2 }, blob: {} });
+    await new Promise(setImmediate);
+    assert.equal(player.target.id, 'mp3');
+    assert.equal(stopped.at(-1), started.at(-1)[0], '旧音声の停止時刻と新音声の開始時刻が一致');
+    context.currentTime = started.at(-1)[0];
+    assert.ok(Math.abs(player.position - (before + .025)) < 1 / 48000);
+    player.pause();
+    const paused = player.position;
+    context.currentTime += 5;
+    assert.equal(player.position, paused);
+    player.seek(20);
+    assert.equal(player.position, 20);
+    let finish;
+    player.decode = () => new Promise(resolve => { finish = resolve; });
+    await player.play();
+    player.seek(40);
+    finish({ key: 'mp3', start: 20 * 48000, end: 28 * 48000, buffer: {} });
+    await new Promise(setImmediate);
+    assert.equal(player.position, 40, '以前の復号結果でシーク位置を巻き戻さない');
+  } finally { player.dispose(); }
 });

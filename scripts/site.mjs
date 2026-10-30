@@ -1,4 +1,5 @@
-import { cp, mkdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { cp, mkdir, writeFile, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, resolve, extname, sep } from 'node:path';
@@ -12,8 +13,11 @@ for (const name of ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js']
 }
 for (const [pkg, destination] of [['ffmpeg', 'ffmpeg'], ['core', 'core']]) {
   await mkdir(resolve(output, 'vendor', destination), { recursive: true });
-  await cp(resolve(root, 'node_modules', '@ffmpeg', pkg, 'dist', 'esm'), resolve(output, 'vendor', destination), { recursive: true });
+  const patched = resolve(root, 'vendor/core/esm');
+  const from = pkg === 'core' && existsSync(patched) ? patched : resolve(root, 'node_modules', '@ffmpeg', pkg, 'dist', 'esm');
+  await cp(from, resolve(output, 'vendor', destination), { recursive: true });
 }
+if (existsSync(resolve(root, 'vendor/core/licenses'))) await cp(resolve(root, 'vendor/core/licenses'), resolve(output, 'licenses'), { recursive: true });
 await writeFile(resolve(output, '.nojekyll'), '');
 console.log('dist/ に静的サイトを生成しました。');
 

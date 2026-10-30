@@ -86,7 +86,7 @@
 }
 
 body { margin:0; }
-#codec-compact { max-width:1120px; margin:auto; min-height:100vh; }
+#codec-compact { box-sizing:border-box; max-width:1120px; margin:auto; min-height:100vh; }
 #codec-compact button { cursor:pointer; }
 #codec-compact button:disabled { cursor:default; }
 #codec-compact :focus-visible { outline:2px solid var(--cc-blue); outline-offset:3px; }
