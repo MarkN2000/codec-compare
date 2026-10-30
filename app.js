@@ -66,6 +66,7 @@ function render() {
   const reference = { id: 'reference', name: '基準音源（PCM変換済み）', state: 'ready', detail: `${source.rate.toLocaleString()} Hz · 24 bit · ${source.channels === 1 ? 'モノラル' : 'ステレオ'}`, size: source.frames * source.channels * 3 };
   for (const pattern of [reference, ...patterns]) {
     const isReference = pattern.id === 'reference', name = isReference ? pattern.name : CODECS[pattern.config.codec].name;
+    const accessibleName = name + (pattern.config?.codec === 'g711' ? ` ${CODECS.g711.laws.find(([law]) => law === pattern.config.law)[1]}` : '');
     const row = document.createElement('div');
     row.className = `cc-row${playback.selected === pattern.id ? ' cc-selected' : ''}`;
     row.innerHTML = '<label class="cc-identity"><input type="radio" name="preview"><span class="cc-label"><span class="cc-codec"><span class="name"></span><span class="cc-state"></span></span><span class="cc-sub"></span></span></label><div class="cc-metrics"><span class="cc-metric size"></span><span class="cc-metric rate"></span><span class="cc-metric cc-ratio"></span></div><div class="cc-actions"></div>';
@@ -76,7 +77,7 @@ function render() {
     const radio = row.querySelector('input');
     radio.value = pattern.id;
     radio.dataset.focus = `${pattern.id}-select`;
-    radio.setAttribute('aria-label', `${name}を試聴`);
+    radio.setAttribute('aria-label', `${accessibleName}を試聴`);
     radio.checked = playback.selected === pattern.id;
     radio.disabled = pattern.state !== 'ready';
     radio.addEventListener('change', () => player.select(isReference ? null : pattern));
@@ -99,7 +100,7 @@ function render() {
         button.className = 'cc-icon';
         if (actionIcons[action]) button.innerHTML = actionIcons[action];
         else button.textContent = '×';
-        button.setAttribute('aria-label', `${name}：${label}`);
+        button.setAttribute('aria-label', `${accessibleName}：${label}`);
         button.title = label;
         button.dataset.focus = `${pattern.id}-${action}`;
         button.disabled = action === 'download' && !pattern.blob;
@@ -159,9 +160,12 @@ function field(key, label, options, value = draft[key]) {
   select.disabled = options.length === 1;
   wrapper.append(select); $('fields').append(wrapper);
   select.addEventListener('change', () => {
+    const wasDefault = draft.bitrate === defaults(draft.codec, draft).bitrate;
     if (key === 'codec') draft = defaults(select.value, source);
-    else draft[key] = ['mode'].includes(key) ? select.value : Number(select.value);
-    if (!bitratesFor(draft).includes(draft.bitrate)) draft.bitrate = bitratesFor(draft).at(-1);
+    else draft[key] = ['mode', 'law'].includes(key) ? select.value : Number(select.value);
+    if (wasDefault && ['rate', 'channels'].includes(key)) draft.bitrate = defaults(draft.codec, draft).bitrate;
+    const bits = bitratesFor(draft);
+    if (bits.length && !bits.includes(draft.bitrate)) draft.bitrate = bits.reduce((a, b) => Math.abs(b - draft.bitrate) < Math.abs(a - draft.bitrate) ? b : a);
     if (key === 'rate' && !cutoffsFor(draft).includes(draft.cutoff)) draft.cutoff = 0;
     if (['codec', 'mode', 'rate', 'channels', 'frameDuration'].includes(key)) { fields(); $('fields').querySelector(`[name="${key}"]`).focus(); }
   });
@@ -170,6 +174,7 @@ function fields() {
   $('fields').replaceChildren();
   const c = CODECS[draft.codec];
   field('codec', '形式', Object.entries(CODECS).map(([id, codec]) => [id, codec.name]));
+  if (c.laws) field('law', '圧伸方式', c.laws);
   if (c.modes) field('mode', 'モード', c.modes);
   if (c.frameDurations) field('frameDuration', 'フレーム長', c.frameDurations.map(n => [n, `${n} ms`]));
   if (c.bits && !(draft.codec === 'mp3' && draft.mode === 'VBR')) field('bitrate', draft.codec === 'aac' ? '平均ビットレート' : 'ビットレート', bitratesFor(draft).map(n => [n, `${n} kbps`]));
@@ -193,7 +198,7 @@ function act(action, pattern) {
   if (action === 'download') {
     const url = URL.createObjectURL(pattern.blob), link = document.createElement('a');
     link.href = url;
-    link.download = `${source.file.name.replace(/\.[^.]*$/, '')}-${pattern.config.codec}-${pattern.id}.${CODECS[pattern.config.codec].ext}`;
+    link.download = `${source.file.name.replace(/\.[^.]*$/, '')}-${pattern.config.codec}${pattern.config.codec === 'g711' ? `-${pattern.config.law}` : ''}-${pattern.id}.${CODECS[pattern.config.codec].ext}`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
     return;

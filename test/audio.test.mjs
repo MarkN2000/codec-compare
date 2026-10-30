@@ -66,8 +66,9 @@ test('配布するWASMで対応形式を生成し、区間復号と24 bit一致�
   assert.equal(reference.length, input.length);
   for (const sample of reference) assert.equal(sample * 8388608, Math.round(sample * 8388608), '24 bitの量子化単位');
   const renderRate = 48000, total = Math.round(source.duration * renderRate);
-  for (const codec of Object.keys(CODECS)) {
-    const config = defaults(codec, source), output = `/encoded.${CODECS[codec].ext}`;
+  for (const config of Object.keys(CODECS).flatMap(codec => codec === 'g711'
+    ? CODECS.g711.laws.map(([law]) => ({ ...defaults(codec, source), law })) : [defaults(codec, source)])) {
+    const codec = config.codec, output = `/encoded.${CODECS[codec].ext}`;
     run(encodeArgs(source, config, '/source.wav', output));
     assert.ok(core.FS.stat(output).size > 0, `${codec}の出力`);
     if (['wav', 'flac'].includes(codec)) {
@@ -89,8 +90,9 @@ test('配布するWASMで対応形式を生成し、区間復号と24 bit一致�
       assert.ok(diff < 0.00005, `${codec} 位置${start}の全体復号との差 ${diff}`);
       core.FS.unlink('/piece');
     }
-    if (['lc3', 'g722', 'sbc', 'mulaw', 'alaw'].includes(codec)) {
+    if (['lc3', 'g722', 'sbc', 'g711'].includes(codec)) {
       const info = probe(output);
+      if (codec === 'g711') assert.equal(info.codec_name, `pcm_${config.law}`);
       assert.equal(Number(info.sample_rate), config.rate);
       assert.equal(Number(info.channels), config.channels);
       assert.equal(whole.length, total * config.channels, `${codec}の末尾まで元音源の長さを維持する`);

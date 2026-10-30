@@ -14,7 +14,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   const context = vm.createContext({
     LIMITS, source: { file: { size: 10 } }, session: 0, encoding: true, graphBusy: false,
     patterns: [{ id: 'a', config, state: 'encoding', blob: { size: 99 }, progress: 50, error: '古いエラー' },
-      { id: 'b', config: { ...config, bitrate: 64 }, state: 'ready', blob: { size: 88 } }],
+      { id: 'b', config: { ...defaults('g711', { rate: 44100, channels: 2 }), law: 'alaw' }, state: 'ready', blob: { size: 88 } }],
     player: player(), makePlayer: player, graph: { reset() {} }, encoder: null, editing: {}, draft: {},
     $: id => { if (!elements.has(id)) elements.set(id, { replaceChildren() {}, append() {}, querySelectorAll: () => [] }); return elements.get(id); },
     document: { createElement: () => ({}) }, render() {}, message() {}, failure: error => errors.push(error.message),
@@ -39,6 +39,8 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   assert.equal(context.patterns[0].config.rate, 48000);
   assert.equal(context.patterns[0].config.channels, 2, '新音源がモノラルでも前の設定を保持');
   assert.equal(context.patterns[0].config.cutoff, 12000, '音源変更でも手動のカットオフを保持');
+  assert.equal(context.patterns[1].config.codec, 'g711');
+  assert.equal(context.patterns[1].config.law, 'alaw', 'G.711の圧伸方式も音源変更で維持');
   assert.equal(context.patterns[0].blob, undefined);
   assert.equal(context.patterns[0].progress, undefined);
   await context.queue(); assert.equal(engines.length, 1, '解析中は変換を始めない');
