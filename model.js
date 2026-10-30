@@ -1,7 +1,7 @@
 export const LIMITS = { input: 256 * 1024 ** 2, output: 128 * 1024 ** 2, total: 512 * 1024 ** 2 };
 const commonRates = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 176400, 192000];
 export const CODECS = {
-  opus: { name: 'Opus', ext: 'ogg', mime: 'audio/ogg', encoder: 'libopus', rates: [8000, 12000, 16000, 24000, 48000], modes: ['VBR', 'CBR'], bits: [32, 48, 64, 96, 128, 160, 192, 256], defaultRate: 48000 },
+  opus: { name: 'Opus', ext: 'ogg', mime: 'audio/ogg', encoder: 'libopus', rates: [8000, 12000, 16000, 24000, 48000], modes: ['VBR', 'CBR'], bits: [6, 8, 12, 16, 20, 24, 32, 48, 64, 96, 128, 160, 192, 256], defaultRate: 48000 },
   mp3: { name: 'MP3', ext: 'mp3', mime: 'audio/mpeg', encoder: 'libmp3lame', rates: commonRates.filter(n => n <= 48000), modes: ['CBR', 'VBR'], bits: [32, 48, 64, 96, 128, 160, 192, 256, 320], qualities: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
   aac: { name: 'AAC', ext: 'm4a', mime: 'audio/mp4', encoder: 'aac', rates: commonRates.filter(n => n <= 96000), bits: [32, 48, 64, 96, 128, 160, 192, 256, 320] },
   vorbis: { name: 'Vorbis', ext: 'ogg', mime: 'audio/ogg', encoder: 'libvorbis', rates: commonRates.filter(n => n <= 96000), qualities: [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },

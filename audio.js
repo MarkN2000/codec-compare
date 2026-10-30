@@ -71,6 +71,7 @@ export class Player {
     this.nodes = new Set();
     this.cache = [];
     this.playing = false;
+    this.loop = false;
     this.buffering = false;
     this.anchorFrame = 0;
     this.chunkSeconds = 8;
@@ -96,7 +97,7 @@ export class Player {
   }
   get position() { return this.frame / this.rate; }
   get ahead() { return this.playing && !this.buffering ? Math.max(0, (this.scheduledEnd - this.frame) / this.rate) : 0; }
-  get canEncode() { return !this.playing || (!this.buffering && this.ahead >= 2); }
+  get canEncode() { return !this.playing || (!this.buffering && (this.ahead >= 2 || this.scheduledEnd === this.totalFrames)); }
   emit() { this.onChange?.({ playing: this.playing, buffering: this.buffering, selected: this.target?.id, pending: this.requested?.id }); }
   async play() {
     if (!this.source) return;
@@ -203,7 +204,11 @@ export class Player {
     const revision = this.revision;
     try {
       let pos = this.frame;
-      if (pos >= this.totalFrames) { this.pause(); this.anchorFrame = this.totalFrames; return; }
+      if (pos >= this.totalFrames) {
+        if (this.loop) this.seek(0);
+        else { this.pause(); this.anchorFrame = this.totalFrames; }
+        return;
+      }
       this.cache = this.cache.filter(c => c.key === this.target.key && c.end > pos);
       if (!this.buffering && this.context.currentTime >= this.endTime) {
         this.anchorFrame = this.scheduledEnd;

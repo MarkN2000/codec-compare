@@ -12,8 +12,9 @@
   <header class="cc-header"><span class="cc-mark" aria-hidden="true">▥</span><h1>Codec Compare</h1></header>
   <main>
     <section class="cc-player" aria-label="音源とプレーヤー">
-      <button class="cc-play cc-primary" id="play" aria-label="再生" disabled>▶</button>
+      <button class="cc-play cc-primary" id="play" aria-label="再生" disabled><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path id="play-icon" d="M6 3 21 12 6 21Z"/></svg></button>
       <span class="cc-filename" id="filename">音源を選択、またはここにドロップ</span>
+      <button class="cc-loop" id="loop" aria-label="ループ再生" aria-pressed="false" title="ループ再生：オフ"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4M21 6H7a4 4 0 0 0-4 4m4 12-4-4 4-4M3 18h14a4 4 0 0 0 4-4"/></svg></button>
       <button class="cc-change" id="change">音源変更</button>
       <div class="cc-source-info" id="source-info"><span>音声はブラウザ内で処理します</span></div>
       <div class="cc-seek-row"><span id="position">00:00</span><input class="cc-seek" id="seek" type="range" min="0" max="0" value="0" step="0.01" aria-label="再生位置" disabled><span id="duration">00:00</span></div>

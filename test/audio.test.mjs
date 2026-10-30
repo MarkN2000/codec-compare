@@ -9,6 +9,7 @@ import { Player } from '../audio.js';
 test('基準PCM・設定・サイズ計算', () => {
   const source = { rate: 44100, channels: 2, frames: 441000, duration: 10 };
   assert.equal(defaults('opus', source).rate, 48000);
+  assert.equal(defaults('opus', source).mode, 'VBR');
   assert.equal(defaults('flac', source).rate, 44100);
   assert.equal(defaults('mp3', { ...source, channels: 1 }).channels, 1);
   assert.equal(samePreview(defaults('flac', source), source), true);
@@ -87,6 +88,36 @@ test('配布するWASMで7形式を生成し、区間復号と24 bit一致を検
     core.FS.unlink('/whole');
     core.FS.unlink(output);
   }
+  for (const bitrate of [6, 8, 12, 16, 20, 24]) {
+    for (const [channels, mode] of [[1, 'VBR'], [2, 'CBR']]) {
+      const config = { ...defaults('opus', source), bitrate, channels, mode };
+      run(encodeArgs(source, config, '/source.wav', '/low.ogg'));
+      assert.equal(probe('/low.ogg').channels, channels);
+      run(chunkArgs(source, { codec: 'opus', channels }, 48000, 48000, 48000, '/low.ogg', '/low.raw'));
+      assert.equal(readFloat('/low.raw').length, 48000 * channels, `${bitrate} kbps ${mode}の区間復号`);
+      run(chunkArgs(source, { codec: 'opus', channels }, total - 48000, 48000, 48000, '/low.ogg', '/tail.raw'));
+      assert.ok(readFloat('/tail.raw').length >= (48000 - 2) * channels, `${bitrate} kbps ${mode}の末尾サンプル数: ${readFloat('/tail.raw').length / channels}`);
+      core.FS.unlink('/tail.raw');
+      core.FS.unlink('/low.ogg');
+      core.FS.unlink('/low.raw');
+    }
+  }
+  // 単純なモノラル信号でSILKを通す。旧native Opus復号は先頭で24サンプル欠落した。
+  const short = { rate: 48000, channels: 1, frames: 96000, duration: 2 };
+  const tone = Float32Array.from({ length: short.frames }, (_, i) => Math.sin(i * 2 * Math.PI * 440 / short.rate) * .1);
+  core.FS.writeFile('/tone.raw', new Uint8Array(tone.buffer));
+  run(['-v', 'error', '-f', 'f32le', '-ar', '48000', '-ac', '1', '-i', '/tone.raw', '/tone.wav']);
+  run(encodeArgs(short, { ...defaults('opus', short), bitrate: 6 }, '/tone.wav', '/tone.ogg'));
+  for (const rate of [44100, 48000]) {
+    const target = { codec: 'opus', channels: 1 };
+    run(chunkArgs(short, target, 0, rate * 2, rate, '/tone.ogg', '/tone-full.raw'));
+    const whole = readFloat('/tone-full.raw');
+    assert.equal(whole.length, rate * 2, 'SILKの先頭・末尾サンプルを欠落させない');
+    run(chunkArgs(short, target, rate, rate, rate, '/tone.ogg', '/tone-part.raw'));
+    assert.deepEqual(readFloat('/tone-part.raw'), whole.slice(rate), 'SILKの区間位置が全体復号と一致');
+    core.FS.unlink('/tone-full.raw');
+    core.FS.unlink('/tone-part.raw');
+  }
   for (const changes of [{ depth: 16 }, { channels: 1 }, { rate: 22050 }]) {
     const config = { ...defaults('wav', source), ...changes };
     run(encodeArgs(source, config, '/source.wav', '/changed.wav'));
@@ -126,7 +157,7 @@ test('再生中の切替で位置を保ち、2パターンを重ねず、シー�
     player.context = context;
     player.setSource({ duration: 60, rate: 48000, channels: 2, file: {} });
     player.decode = async (target, start) => {
-      const chunk = { key: target.key, start, end: start + 48000 * 8, buffer: {} };
+      const chunk = { key: target.key, start, end: Math.min(player.totalFrames, start + 48000 * 8), buffer: {} };
       player.cache.push(chunk);
       return chunk;
     };
@@ -148,6 +179,25 @@ test('再生中の切替で位置を保ち、2パターンを重ねず、シー�
     const paused = player.position;
     context.currentTime += 5;
     assert.equal(player.position, paused);
+    player.loop = true;
+    player.seek(59);
+    await player.play();
+    await new Promise(setImmediate);
+    assert.equal(player.canEncode, true, '末尾まで準備済みなら残り2秒未満でも変換できる');
+    context.currentTime = player.endTime;
+    await player.pump();
+    assert.equal(player.position, 0, 'ループ時は末尾から先頭に戻る');
+    assert.equal(player.playing, true);
+    assert.equal(player.target.id, 'mp3', 'ループしても選択中の形式を維持');
+    await player.pump();
+    assert.equal(player.buffering, false, '先頭区間を準備したら再生を再開');
+    player.loop = false;
+    player.seek(59);
+    await player.pump();
+    context.currentTime = player.endTime;
+    await player.pump();
+    assert.equal(player.playing, false, 'ループをオフにすると末尾で停止');
+    assert.equal(player.position, 60);
     player.seek(20);
     assert.equal(player.position, 20);
     let finish;

@@ -7,13 +7,15 @@ let playback = {}, player = makePlayer();
 function message(text = '') { $('notice').textContent = text; $('notice').hidden = !text; }
 function failure(error) { message(error instanceof Error ? error.message : String(error)); }
 function makePlayer() {
-  return new Player(state => {
+  const instance = new Player(state => {
     playback = state;
-    $('play').textContent = state.playing ? 'Ⅱ' : '▶';
+    $('play-icon').setAttribute('d', state.playing ? 'M5 3H10V21H5ZM14 3H19V21H14Z' : 'M6 3 21 12 6 21Z');
     $('play').setAttribute('aria-label', state.playing ? '一時停止' : '再生');
     $('play').setAttribute('aria-busy', String(state.buffering));
     render();
   }, failure);
+  instance.loop = $('loop').getAttribute('aria-pressed') === 'true';
+  return instance;
 }
 function status(pattern) {
   if (playback.pending === pattern.id) return '切替準備中';
@@ -27,7 +29,7 @@ function render() {
   if (!source) return;
   const focused = document.activeElement?.dataset.focus;
   $('patterns').replaceChildren();
-  const reference = { id: 'reference', name: '基準音源', state: 'ready', detail: `${source.rate.toLocaleString()} Hz · 24 bit · ${source.channels === 1 ? 'モノラル' : 'ステレオ'}`, size: source.frames * source.channels * 3 };
+  const reference = { id: 'reference', name: '基準音源（PCM）', state: 'ready', detail: `${source.rate.toLocaleString()} Hz · 24 bit · ${source.channels === 1 ? 'モノラル' : 'ステレオ'}`, size: source.frames * source.channels * 3 };
   for (const pattern of [reference, ...patterns]) {
     const isReference = pattern.id === 'reference', name = isReference ? pattern.name : CODECS[pattern.config.codec].name;
     const row = document.createElement('div');
@@ -47,7 +49,8 @@ function render() {
     const size = isReference ? pattern.size : pattern.blob?.size;
     if (size !== undefined) {
       const m = metrics(size, source);
-      row.querySelector('.size').textContent = sizeLabel(size);
+      row.querySelector('.size').textContent = `${isReference ? 'PCM換算 ' : ''}${sizeLabel(size)}`;
+      if (isReference) row.querySelector('.size').title = '24 bit PCMに展開した場合の容量（ヘッダーなし）。入力ファイルの容量とは異なります。';
       row.querySelector('.rate').textContent = `${m.bitrate.toFixed(1)} kbps`;
       row.querySelector('.cc-ratio').append(document.createTextNode(`${m.ratio.toFixed(1)}% `));
       const small = document.createElement('small');
@@ -98,7 +101,7 @@ async function loadFile(file) {
     if (current !== session) return;
     source = result;
     $('source-info').replaceChildren();
-    for (const text of [`${source.rate.toLocaleString()} Hz`, source.bits ? `${source.bits} bit` : '非可逆圧縮', source.originalChannels === 1 ? 'モノラル' : source.originalChannels === 2 ? 'ステレオ' : `${source.originalChannels} ch → ステレオ`, sizeLabel(file.size)]) {
+    for (const text of [`${source.rate.toLocaleString()} Hz`, source.bits ? `${source.bits} bit` : '非可逆圧縮', source.originalChannels === 1 ? 'モノラル' : source.originalChannels === 2 ? 'ステレオ' : `${source.originalChannels} ch → ステレオ`, `入力 ${sizeLabel(file.size)}`]) {
       const span = document.createElement('span'); span.textContent = text; $('source-info').append(span);
     }
     $('seek').max = source.duration;
@@ -211,6 +214,11 @@ $('add').addEventListener('click', () => openEditor());
 $('change').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', () => { loadFile($('file').files[0]); $('file').value = ''; });
 $('play').addEventListener('click', () => { if (player.playing) player.pause(); else player.play().catch(failure); });
+$('loop').addEventListener('click', () => {
+  player.loop = !player.loop;
+  $('loop').setAttribute('aria-pressed', String(player.loop));
+  $('loop').title = `ループ再生：${player.loop ? 'オン' : 'オフ'}`;
+});
 let seeking = false;
 $('seek').addEventListener('input', () => { seeking = true; $('position').textContent = timeLabel(Number($('seek').value)); });
 $('seek').addEventListener('change', () => { player.seek(Number($('seek').value)); seeking = false; });
