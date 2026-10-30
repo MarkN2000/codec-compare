@@ -93,7 +93,7 @@ body { margin:0; }
 #codec-compact button { cursor:pointer; }
 #codec-compact button:disabled { cursor:default; }
 #codec-compact :focus-visible { outline:2px solid var(--cc-blue); outline-offset:3px; }
-#codec-compact .cc-mark { color:var(--cc-blue); font-size:22px; line-height:1; }
+#codec-compact .cc-mark { display:block; width:24px; height:24px; flex-shrink:0; }
 #codec-compact .cc-empty { margin:12px; color:var(--cc-muted); font-size:12px; }
 #codec-compact .cc-notice { overflow-wrap:anywhere; }
 
