@@ -1,4 +1,4 @@
-# Codec Compare
+# ききくらべ
 
 ローカルの音源をブラウザ内で変換し、音質とサイズを比較します。仕様は[spec.md](spec.md)。外部フォント・解析サービス・音声アップロードは使いません。
 
@@ -65,7 +65,7 @@ npm test
 
 ## 公開
 
-[公開サイト](https://markn2000.github.io/codec-compare/)（GitHub Pages）。リポジトリは公開設定です。
+[公開サイト](https://markn2000.github.io/kikikurabe/)（GitHub Pages）。リポジトリは公開設定です。
 
 更新時はGitHub Actionsの「GitHub Pagesへ公開」を手動実行します。テストとビルドに成功した成果物を公開します。独自ドメインはSettings → Pagesで指定します。ドメイン名はまだ未指定です。
 

@@ -1,7 +1,7 @@
 # 一時使用する音声コア
 
 - ビルド日：2026-10-30
-- ビルド元：[GitHub Actions実行 #41055682271](https://github.com/MarkN2000/codec-compare/actions/runs/41055682271)
+- ビルド元：[GitHub Actions実行 #41055682271](https://github.com/MarkN2000/kikikurabe/actions/runs/41055682271)
 - サイトのビルド設定コミット：`7f9128b`
 - ffmpeg.wasm上流コミット：`f876f907c7e9b9bf51d4ed0b913a855a63ae63fc`
 - FFmpeg：5.1.4、Emscripten：3.1.40、シングルスレッド、スタック5 MiB
