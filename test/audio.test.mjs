@@ -35,6 +35,14 @@ test('配布するWASMで7形式を生成し、区間復号と24 bit一致を検
     assert.equal(result, 0, logs.join('\n'));
   }
   function readFloat(path) { const data = core.FS.readFile(path); return new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4); }
+  function probe(path) {
+    core.ffprobe('-v', 'error', '-select_streams', 'a:0', '-show_streams', '-of', 'json', '-o', '/probe.json', path);
+    core.reset();
+    const info = JSON.parse(new TextDecoder().decode(core.FS.readFile('/probe.json'))).streams?.[0];
+    core.FS.unlink('/probe.json');
+    assert.ok(info, '音声メタデータを取得できる');
+    return info;
+  }
   const source = { rate: 44100, channels: 2, frames: 44100 * 13 + 123 };
   source.duration = source.frames / source.rate;
   const input = new Float32Array(source.frames * 2);
@@ -46,6 +54,8 @@ test('配布するWASMで7形式を生成し、区間復号と24 bit一致を検
   }
   core.FS.writeFile('/source.raw', new Uint8Array(input.buffer));
   run(['-v', 'error', '-f', 'f32le', '-ar', '44100', '-ac', '2', '-i', '/source.raw', '-c:a', 'pcm_f32le', '/source.wav']);
+  run(['-v', 'info', '-i', '/source.wav', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']);
+  assert.equal(logs.reduce((n, line) => n + Number(line.match(/\bnb_samples:(\d+)/)?.[1] || 0), 0), source.frames, 'PCMを保存せず正確なサンプル数を取得');
   run(['-v', 'error', '-i', '/source.wav', '-af', commonFilter(source), '-f', 'f32le', '/reference']);
   const reference = readFloat('/reference');
   assert.equal(reference.length, input.length);
@@ -77,6 +87,29 @@ test('配布するWASMで7形式を生成し、区間復号と24 bit一致を検
     core.FS.unlink('/whole');
     core.FS.unlink(output);
   }
+  for (const changes of [{ depth: 16 }, { channels: 1 }, { rate: 22050 }]) {
+    const config = { ...defaults('wav', source), ...changes };
+    run(encodeArgs(source, config, '/source.wav', '/changed.wav'));
+    const info = probe('/changed.wav');
+    assert.equal(Number(info.sample_rate), config.rate);
+    assert.equal(info.channels, config.channels);
+    assert.equal(Number(info.bits_per_sample), config.depth);
+    assert.equal(samePreview(config, source), false);
+    run(['-v', 'error', '-i', '/changed.wav', '-f', 'f32le', '/changed.raw']);
+    const changed = readFloat('/changed.raw');
+    if (config.depth === 16) {
+      assert.notDeepEqual(changed, reference);
+      for (const sample of changed) assert.equal(sample * 32768, Math.round(sample * 32768));
+    }
+    core.FS.unlink('/changed.wav');
+    core.FS.unlink('/changed.raw');
+  }
+  // 多チャンネル入力でも基準の最大2チャンネル条件を適用する。
+  core.FS.writeFile('/six.raw', new Uint8Array(new Float32Array(44100 * 6).fill(0.01).buffer));
+  run(['-v', 'error', '-f', 'f32le', '-ar', '44100', '-ac', '6', '-channel_layout', '5.1', '-i', '/six.raw', '-c:a', 'pcm_f32le', '/six.wav']);
+  run(encodeArgs(source, defaults('wav', source), '/six.wav', '/stereo.wav'));
+  assert.equal(probe('/six.wav').channels, 6);
+  assert.equal(probe('/stereo.wav').channels, 2);
 });
 
 test('再生中の切替で位置を保ち、2パターンを重ねず、シークで古い復号を捨てる', async () => {
