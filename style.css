@@ -19,7 +19,8 @@
 #codec-compact .cc-filename { grid-column:2; grid-row:1; min-width:0; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #codec-compact .cc-change { grid-column:4; grid-row:1/3; min-height:48px; align-self:stretch; font-size:12px; }
 #codec-compact .cc-loop { grid-column:3; grid-row:1/3; min-height:48px; align-self:stretch; }
-#codec-compact .cc-loop[aria-pressed="true"] { color:var(--cc-blue); background:#dcefff; border-color:var(--cc-blue); box-shadow:inset 0 -3px var(--cc-blue); }
+#codec-compact .cc-loop[aria-pressed="true"] { color:#fff; background:var(--cc-blue); border-color:var(--cc-blue); }
+#codec-compact .cc-loop[aria-pressed="true"]:hover { background:#0563b5; border-color:#0563b5; }
 #codec-compact .cc-source-info { grid-column:2; grid-row:2; display:flex; flex-wrap:wrap; align-items:center; column-gap:8px; color:var(--cc-muted); font-size:12px; }
 #codec-compact .cc-source-info span { white-space:nowrap; }
 #codec-compact .cc-source-info span+span::before { content:'·'; margin-right:8px; color:#94a6b7; }
