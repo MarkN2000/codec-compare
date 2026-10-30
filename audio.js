@@ -237,7 +237,7 @@ export class Player {
         const chunk = await this.decode(target, start, revision);
         if (!chunk || revision !== this.revision || this.requested !== target) return;
         const when = this.context.currentTime + 0.025;
-        const switchFrame = this.frame + Math.round((when - this.context.currentTime) * this.rate);
+        const switchFrame = this.anchorFrame + Math.round((when - this.anchorTime) * this.rate);
         if (switchFrame + this.rate * 0.1 >= chunk.end || when >= this.endTime) return;
         this.stopNodes(when - 0.005);
         this.target = target;

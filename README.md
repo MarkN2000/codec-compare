@@ -33,7 +33,7 @@ npm run dev
 docker buildx build -f scripts/core.Dockerfile --output type=local,dest=vendor/core .
 ```
 
-ビルド元コミット・依存音声ライブラリ・スタック容量はDockerfileで管理します。**修正版コアのビルド・取り込みは現在未完了です。配布版コアを使う状態ではOpusのテストが失敗します。**
+ビルド元コミット・依存音声ライブラリ・スタック容量はDockerfileで管理します。検証済みのコアを `vendor/core/` に同梱しているので、通常の起動・サイト更新ではコアの再ビルドは不要です。[ビルド記録](vendor/core/BUILD.md)を参照してください。
 
 ## 現在の実装
 
@@ -57,7 +57,7 @@ npm test
 
 外部テストフレームワークを使わず、生成した信号を実際のWASMで7形式に変換します。24 bitの量子化、FLAC/WAVと基準PCMの一致、複数位置の区間復号、サイズ計算、再生タイムラインを確認します。
 
-ブラウザでの確認はローカルのChromium系ブラウザで実施します。Android実機・Safari・Firefox・長時間音源での推奨スペックは未検証です。
+2026-10-30にGitHub Actionsとローカルで全テストを通過しました。Chromium系ブラウザでも7形式の変換、Opusの連続再生、AACへの切り替え、ADPCMの途中再生を確認しました。Android実機・Safari・Firefox・長時間音源での推奨スペックは未検証です。
 
 ## 公開
 

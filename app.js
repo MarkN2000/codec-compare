@@ -51,7 +51,7 @@ function render() {
       row.querySelector('.rate').textContent = `${m.bitrate.toFixed(1)} kbps`;
       row.querySelector('.cc-ratio').append(document.createTextNode(`${m.ratio.toFixed(1)}% `));
       const small = document.createElement('small');
-      small.textContent = `削減 ${m.saved.toFixed(1)}%`;
+      small.textContent = `削減 ${Number(m.saved.toFixed(1)).toFixed(1)}%`;
       row.querySelector('.cc-ratio').append(small);
     } else {
       for (const el of row.querySelectorAll('.cc-metric')) el.textContent = '—';
