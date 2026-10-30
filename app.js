@@ -29,7 +29,7 @@ function render() {
   if (!source) return;
   const focused = document.activeElement?.dataset.focus;
   $('patterns').replaceChildren();
-  const reference = { id: 'reference', name: '基準音源（PCM）', state: 'ready', detail: `${source.rate.toLocaleString()} Hz · 24 bit · ${source.channels === 1 ? 'モノラル' : 'ステレオ'}`, size: source.frames * source.channels * 3 };
+  const reference = { id: 'reference', name: '基準音源（PCM変換済み）', state: 'ready', detail: `${source.rate.toLocaleString()} Hz · 24 bit · ${source.channels === 1 ? 'モノラル' : 'ステレオ'}`, size: source.frames * source.channels * 3 };
   for (const pattern of [reference, ...patterns]) {
     const isReference = pattern.id === 'reference', name = isReference ? pattern.name : CODECS[pattern.config.codec].name;
     const row = document.createElement('div');
