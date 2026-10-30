@@ -1,0 +1,16 @@
+{
+  "name": "codec-compare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/site.mjs build",
+    "dev": "node scripts/site.mjs serve",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "0.12.10",
+    "@ffmpeg/ffmpeg": "0.12.15"
+  },
+  "engines": { "node": ">=22" }
+}

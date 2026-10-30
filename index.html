@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="音源をブラウザ内で圧縮し、音質とファイルサイズを比較。音声ファイルは送信しません。">
+  <title>Codec Compare — 音声コーデック比較</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body id="codec-compact">
+  <header class="cc-header"><span class="cc-mark" aria-hidden="true">▥</span><h1>Codec Compare</h1></header>
+  <main>
+    <section class="cc-player" aria-label="音源とプレーヤー">
+      <button class="cc-play cc-primary" id="play" aria-label="再生" disabled>▶</button>
+      <span class="cc-filename" id="filename">音源を選択、またはここにドロップ</span>
+      <button class="cc-change" id="change">音源変更</button>
+      <div class="cc-source-info" id="source-info"><span>音声はブラウザ内で処理します</span></div>
+      <div class="cc-seek-row"><span id="position">00:00</span><input class="cc-seek" id="seek" type="range" min="0" max="0" value="0" step="0.01" aria-label="再生位置" disabled><span id="duration">00:00</span></div>
+      <input id="file" type="file" accept="audio/*,.opus,.ogg,.flac,.wav,.m4a,.aac,.aif,.aiff" aria-label="音源ファイル" hidden>
+    </section>
+    <section class="cc-comparison" aria-label="比較パターン">
+      <div class="cc-toolbar"><h2>比較パターン</h2><button class="cc-primary" id="add" disabled><span aria-hidden="true">＋</span>追加</button></div>
+      <form class="cc-editor" id="editor" aria-label="パターン設定" hidden>
+        <div class="cc-editor-heading"><h2 id="editor-title">パターンを追加</h2><button type="button" class="cc-icon" data-close aria-label="設定を閉じる">×</button></div>
+        <div class="cc-fields" id="fields"></div>
+        <div class="cc-editor-buttons"><button type="button" data-close>キャンセル</button><button type="submit" class="cc-primary">保存して変換</button></div>
+      </form>
+      <div class="cc-table-head" aria-hidden="true"><span>音声・設定</span><span>サイズ</span><span>実効レート</span><span>基準PCM比 / 削減率</span><span></span></div>
+      <div class="cc-patterns" id="patterns"><p class="cc-empty">音源を選択すると比較できます。</p></div>
+    </section>
+    <div class="cc-notice" id="notice" role="status" aria-live="polite" hidden></div>
+    <noscript>JavaScriptを有効にしてください。</noscript>
+  </main>
+</body>
+</html>
