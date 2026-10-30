@@ -17,11 +17,17 @@ npm run dev
 
 公式 `@ffmpeg/core@0.12.10` にはOpus 48 kHzのスタック不足があるため、上流の[修正 #824](https://github.com/ffmpegwasm/ffmpeg.wasm/pull/824)を含む音声用コアを使用します。音質設定による回避はしません。
 
+自前ビルドは一時的な対応です。修正を含む公式配布版がリリースされたら、7形式の変換・区間再生を検証し、依存バージョンを固定して公式版へ切り替えます。その際に `vendor/core/` の自前コアを外します。
+
+コアのビルドは初回とコア更新時だけ必要です。生成済みの成果物を保存して使い回すため、サイトの変更・公開のたびにコアを作り直す必要はありません。次の2通りから選べます。
+
+**GitHub上で手動実行する場合：**
+
 1. GitHub Actionsの「音声コアのビルド」を手動実行する。
 2. 成功した実行の `audio-core` artifactを `vendor/core/` に展開する。
 3. `npm test` と `npm run build` を実行する。
 
-Dockerがある環境では、次のコマンドでも同じコアを生成できます。
+**ローカルで実行する場合：** Dockerがある環境では、次のコマンドでも同じコアを生成できます。
 
 ```sh
 docker buildx build -f scripts/core.Dockerfile --output type=local,dest=vendor/core .
