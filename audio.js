@@ -100,9 +100,11 @@ export class Player {
   emit() { this.onChange?.({ playing: this.playing, buffering: this.buffering, selected: this.target?.id, pending: this.requested?.id }); }
   async play() {
     if (!this.source) return;
+    const revision = this.revision;
     const seconds = this.position;
     this.context ||= new AudioContext();
     await this.context.resume();
+    if (revision !== this.revision) return;
     this.anchorFrame = Math.round(seconds * this.rate);
     if (this.anchorFrame >= this.totalFrames) this.anchorFrame = 0;
     this.playing = true;
