@@ -14,14 +14,17 @@ def replace(path, before, after):
 
 
 for name in ("liblc3enc.c", "liblc3dec.c"):
-    (root / "libavcodec" / name).write_text((source / name).read_text())
+    (root / "libavcodec" / name).write_text((source / name).read_text().replace(
+        'CODEC_LONG_NAME("LC3 (Low Complexity Communication Codec)")',
+        '.p.long_name = NULL_IF_CONFIG_SMALL("LC3 (Low Complexity Communication Codec)")'))
 (root / "libavformat/lc3.c").write_text((source / "lc3.c").read_text())
 
 replace("libavcodec/liblc3enc.c", "CODEC_SAMPLERATES(96000, 48000, 32000, 24000, 16000, 8000)",
         ".p.supported_samplerates = (const int[]){96000, 48000, 32000, 24000, 16000, 8000, 0}")
 replace("libavcodec/liblc3enc.c", "CODEC_SAMPLEFMTS(AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_FLT)",
         ".p.sample_fmts = (const enum AVSampleFormat[]){AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_FLT, AV_SAMPLE_FMT_NONE}")
-# 5.1はAVFrame.durationがない。末尾は常に追加のゼロフレームで遅延分を排出する。
+# ponytail: 5.1はAVFrame.durationがないため末尾に追加のゼロフレームを出す。
+# 余白は最大1フレーム増える。新版APIへ移行したら公式のパディング判定へ戻す。
 replace("libavcodec/liblc3enc.c", "int padding = frame->nb_samples - frame->duration;", "int padding = 0;")
 
 container = root / "libavformat/lc3.c"
