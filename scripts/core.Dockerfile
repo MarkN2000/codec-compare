@@ -22,8 +22,9 @@ RUN bash /upstream/build/ffmpeg.sh --disable-everything --disable-network --enab
     --enable-parser=aac,mpegaudio,opus,vorbis,flac \
     --enable-filter=abuffer,abuffersink,aformat,aeval,aresample,atrim,asetpts,ashowinfo,anull
 RUN cp -R /upstream/src/bind /upstream/src/fftools /src/ && mkdir -p src && mv bind fftools src/
-# 上流の修正（STACK_SIZE=5MB）を含むスクリプトでリンクする。
-RUN mkdir -p dist/umd dist/esm && bash /upstream/build/ffmpeg-wasm.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -o dist/umd/ffmpeg-core.js && bash /upstream/build/ffmpeg-wasm.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -sEXPORT_ES6 -o dist/esm/ffmpeg-core.js
+# 音声構成では無効なGPL映像後処理ライブラリをリンク対象から外す。
+# スタック容量（5MB）などは上流の修正をそのまま使用する。
+RUN sed '/^[[:space:]]*-lpostproc[[:space:]]*$/d' /upstream/build/ffmpeg-wasm.sh > /src/link.sh && mkdir -p dist/umd dist/esm && bash /src/link.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -o dist/umd/ffmpeg-core.js && bash /src/link.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -sEXPORT_ES6 -o dist/esm/ffmpeg-core.js
 RUN printf '{"type":"commonjs"}\n' > dist/package.json && mkdir -p dist/licenses && cp /upstream/LICENSE dist/licenses/ffmpeg-wasm.txt && cp COPYING.LGPLv2.1 dist/licenses/ffmpeg.txt && cp /lame/COPYING dist/licenses/lame.txt && cp /opus/COPYING dist/licenses/opus.txt && cp /ogg/COPYING dist/licenses/ogg.txt && cp /vorbis/COPYING dist/licenses/vorbis.txt
 FROM scratch AS output
 COPY --from=builder /src/dist/ /

@@ -11,6 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
+        id: core-build
         with:
           context: .
           file: scripts/core.Dockerfile
@@ -24,6 +25,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm test
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         with:
           name: audio-core
           path: vendor/core
