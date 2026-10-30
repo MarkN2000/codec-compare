@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(root, 'dist');
 await mkdir(output, { recursive: true });
-for (const name of ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'icon.svg', 'ogp.png']) {
+for (const name of ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js', 'icon.svg', 'ogp.png']) {
   await cp(resolve(root, name), resolve(output, name));
 }
 for (const [pkg, destination] of [['ffmpeg', 'ffmpeg'], ['core', 'core']]) {
@@ -27,7 +27,7 @@ if (process.argv[2] === 'serve') {
     try {
       const url = new URL(request.url, 'http://localhost');
       const path = decodeURIComponent(url.pathname);
-      const live = ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js'];
+      const live = ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js'];
       const name = path === '/' ? 'index.html' : path.slice(1);
       const base = live.includes(name) ? root : output;
       const target = resolve(base, name);

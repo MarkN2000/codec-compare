@@ -11,20 +11,23 @@ RUN mkdir /lame && cd /lame && git init && git remote add origin https://github.
 RUN git clone --depth=1 -b v1.3.4 https://github.com/ffmpegwasm/Ogg.git /ogg && cd /ogg && bash /upstream/build/ogg.sh
 RUN git clone --depth=1 -b v1.3.1 https://github.com/ffmpegwasm/opus.git /opus && cd /opus && bash /upstream/build/opus.sh
 RUN git clone --depth=1 -b v1.3.3 https://github.com/ffmpegwasm/vorbis.git /vorbis && cd /vorbis && bash /upstream/build/vorbis.sh
+RUN git init /lc3 && cd /lc3 && git remote add origin https://github.com/google/liblc3.git && git fetch --depth=1 origin f9c127fd35975a0494b9e187589501ee984dc4b6 && git checkout FETCH_HEAD && mkdir -p /opt/audio/include /opt/audio/lib /lc3/obj && cp include/*.h /opt/audio/include/ && for file in src/*.c; do emcc -O3 -msimd128 -Iinclude -Isrc -c "$file" -o "/lc3/obj/$(basename "$file" .c).o"; done && emar rcs /opt/audio/lib/liblc3.a /lc3/obj/*.o
 RUN git clone --depth=1 -b n5.1.4 https://github.com/FFmpeg/FFmpeg.git /src
+COPY scripts/lc3 /lc3-backport
+RUN python3 /lc3-backport/backport.py /src
 WORKDIR /src
-RUN bash /upstream/build/ffmpeg.sh --disable-everything --disable-network --enable-libmp3lame --enable-libopus --enable-libvorbis \
+RUN bash /upstream/build/ffmpeg.sh --disable-everything --disable-network --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-liblc3 \
     --enable-protocol=file,pipe \
-    --enable-decoder=aac,aac_fixed,mp3,mp3float,mp2,mp2float,libopus,vorbis,flac,adpcm_ima_wav,pcm_s8,pcm_u8,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be,pcm_f32le,pcm_f32be,pcm_f64le,pcm_f64be \
-    --enable-encoder=libmp3lame,libopus,libvorbis,aac,flac,adpcm_ima_wav,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le \
-    --enable-demuxer=wav,aiff,flac,mp3,aac,mov,ogg,matroska,pcm_f32le \
-    --enable-muxer=wav,flac,mp3,ipod,ogg,pcm_f32le,null \
-    --enable-parser=aac,mpegaudio,opus,vorbis,flac \
-    --enable-filter=abuffer,abuffersink,aformat,aeval,aresample,atrim,asetpts,ashowinfo,anull
+    --enable-decoder=aac,aac_fixed,mp3,mp3float,mp2,mp2float,libopus,vorbis,flac,liblc3,sbc,adpcm_g722,adpcm_ima_wav,pcm_alaw,pcm_mulaw,pcm_s8,pcm_u8,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be,pcm_f32le,pcm_f32be,pcm_f64le,pcm_f64be \
+    --enable-encoder=libmp3lame,libopus,libvorbis,aac,flac,liblc3,sbc,adpcm_g722,adpcm_ima_wav,pcm_alaw,pcm_mulaw,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le \
+    --enable-demuxer=wav,aiff,flac,mp3,aac,mov,ogg,matroska,lc3,sbc,pcm_f32le \
+    --enable-muxer=wav,flac,mp3,ipod,ogg,lc3,sbc,pcm_f32le,null \
+    --enable-parser=aac,mpegaudio,opus,vorbis,flac,sbc \
+    --enable-filter=abuffer,abuffersink,aformat,aeval,aresample,atrim,asetpts,ashowinfo,anull,apad
 RUN cp -R /upstream/src/bind /upstream/src/fftools /src/ && mkdir -p src && mv bind fftools src/
 # 音声構成では無効なGPL映像後処理ライブラリをリンク対象から外す。
 # スタック容量（5MB）などは上流の修正をそのまま使用する。
-RUN sed '/^[[:space:]]*-lpostproc[[:space:]]*$/d' /upstream/build/ffmpeg-wasm.sh > /src/link.sh && mkdir -p dist/umd dist/esm && bash /src/link.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -o dist/umd/ffmpeg-core.js && bash /src/link.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -sEXPORT_ES6 -o dist/esm/ffmpeg-core.js
-RUN printf '{"type":"commonjs"}\n' > dist/package.json && mkdir -p dist/licenses && cp /upstream/LICENSE dist/licenses/ffmpeg-wasm.txt && cp COPYING.LGPLv2.1 dist/licenses/ffmpeg.txt && cp /lame/COPYING dist/licenses/lame.txt && cp /opus/COPYING dist/licenses/opus.txt && cp /ogg/COPYING dist/licenses/ogg.txt && cp /vorbis/COPYING dist/licenses/vorbis.txt
+RUN sed '/^[[:space:]]*-lpostproc[[:space:]]*$/d' /upstream/build/ffmpeg-wasm.sh > /src/link.sh && mkdir -p dist/umd dist/esm && bash /src/link.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -llc3 -o dist/umd/ffmpeg-core.js && bash /src/link.sh -lmp3lame -logg -lvorbis -lvorbisenc -lvorbisfile -lopus -llc3 -sEXPORT_ES6 -o dist/esm/ffmpeg-core.js
+RUN printf '{"type":"commonjs"}\n' > dist/package.json && mkdir -p dist/licenses && cp /upstream/LICENSE dist/licenses/ffmpeg-wasm.txt && cp COPYING.LGPLv2.1 dist/licenses/ffmpeg.txt && cp /lame/COPYING dist/licenses/lame.txt && cp /opus/COPYING dist/licenses/opus.txt && cp /ogg/COPYING dist/licenses/ogg.txt && cp /vorbis/COPYING dist/licenses/vorbis.txt && cp /lc3/LICENSE dist/licenses/lc3.txt
 FROM scratch AS output
 COPY --from=builder /src/dist/ /

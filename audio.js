@@ -1,6 +1,6 @@
 import { LIMITS, CODECS, commonFilter, encodeArgs, chunkArgs, samePreview } from './model.js';
 
-// 各インスタンスは1件ずつ処理する。変換用と再生用の2つだけを生成する。
+// 各インスタンスは1件ずつ処理する。変換側（グラフ兼用）と再生側の最大2つを動かす。
 export class Engine {
   constructor() { this.logs = []; this.blob = null; }
   async load() {
@@ -34,30 +34,53 @@ export class Engine {
     if (result !== 0 && !(probe && result === -1)) throw Error(`音声処理に失敗しました。${this.logs.filter(s => !s.startsWith('Aborted')).slice(-3).join(' ')}`);
   }
   async analyze(file) {
-    if (!file.size || file.size > LIMITS.input) throw Error('0バイトのファイル、または256 MiBを超える入力は扱えません。');
+    if (!file.size || file.size > LIMITS.input) throw Error('0バイトのファイル、または512 MiBを超える入力は扱えません。');
     await this.mount(file);
-    await this.run(['-v', 'error', '-select_streams', 'a:0', '-show_streams', '-of', 'json', '-o', '/probe.json', '/input/audio'], true);
+    const inputOptions = /\.sbc$/i.test(file.name || '') ? ['-f', 'sbc'] : [];
+    await this.run(['-v', 'error', '-select_streams', 'a:0', '-show_streams', '-of', 'json', '-o', '/probe.json', ...inputOptions, '/input/audio'], true);
     const info = JSON.parse(await this.ffmpeg.readFile('/probe.json', 'utf8')).streams?.[0];
     await this.ffmpeg.deleteFile('/probe.json');
     const rate = Number(info?.sample_rate), originalChannels = Number(info?.channels);
     if (!Number.isInteger(rate) || rate < 8000 || rate > 192000 || !Number.isInteger(originalChannels) || originalChannels < 1) throw Error('対応する音声がありません。8～192 kHzの音源を選択してください。');
     let frames = 0;
     this.onLog = message => { const match = message.match(/\bnb_samples:(\d+)/); if (match) frames += Number(match[1]); };
-    try { await this.run(['-v', 'info', '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
+    try { await this.run(['-v', 'info', ...inputOptions, '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
     finally { this.onLog = null; }
     if (!frames) throw Error('音声サンプルを読み取れませんでした。');
     return { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null, frames, duration: frames / rate };
   }
   async encode(source, config) {
     const codec = CODECS[config.codec], path = `/output.${codec.ext}`;
-    if (config.codec === 'wav' && source.duration * config.rate * config.channels * config.depth / 8 >= LIMITS.output - 65536) throw Error('この設定の出力は128 MiBを超えます。サンプルレートやビット深度を下げてください。');
+    const frames = Math.ceil(source.duration * config.rate);
+    if (config.codec === 'lc3' && (!Number.isSafeInteger(frames) || frames < 1 || frames > 0xffffffff)) throw Error('この音源はLC3のサンプル数上限を超えます。');
+    if (config.codec === 'wav' && source.duration * config.rate * config.channels * config.depth / 8 >= LIMITS.output - 65536) throw Error('この設定の出力は512 MiBを超えます。サンプルレートやビット深度を下げてください。');
     await this.mount(source.file);
     try {
       await this.run(encodeArgs(source, config));
       const data = await this.ffmpeg.readFile(path);
-      if (data.length >= LIMITS.output - 65536) throw Error('出力上限の128 MiBに達したため、生成を取り消しました。');
+      if (data.length >= LIMITS.output - 65536) throw Error('出力上限の512 MiBに達したため、生成を取り消しました。');
+      if (config.codec === 'lc3') {
+        if (data.length < 18 || new DataView(data.buffer, data.byteOffset, data.byteLength).getUint16(0) !== 0x1ccc) throw Error('LC3の出力ヘッダーが不正です。');
+        new DataView(data.buffer, data.byteOffset, data.byteLength).setUint32(14, frames, true);
+      }
       return new Blob([data], { type: codec.mime });
     } finally { await this.ffmpeg.deleteFile(path).catch(() => {}); }
+  }
+  async decode(source, target, start, frames, context) {
+    await this.mount(target.blob);
+    try {
+      await this.run(chunkArgs(source, target, start, frames, context.sampleRate));
+      const data = await this.ffmpeg.readFile('/chunk.f32');
+      const samples = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
+      const received = samples.length / target.channels;
+      if (received < frames - 2) throw Error('必要な再生区間を復号できませんでした。この音源では正確な区間再生に対応できません。');
+      const buffer = context.createBuffer(target.channels, frames, context.sampleRate);
+      for (let ch = 0; ch < target.channels; ch++) {
+        const out = buffer.getChannelData(ch);
+        for (let i = 0; i < Math.min(frames, received); i++) out[i] = samples[i * target.channels + ch];
+      }
+      return buffer;
+    } finally { await this.ffmpeg.deleteFile('/chunk.f32').catch(() => {}); }
   }
   terminate() { this.closed = true; this.ffmpeg?.terminate(); this.blob = null; }
 }
@@ -99,15 +122,21 @@ export class Player {
   get ahead() { return this.playing && !this.buffering ? Math.max(0, (this.scheduledEnd - this.frame) / this.rate) : 0; }
   get canEncode() { return !this.playing || (!this.buffering && (this.ahead >= 2 || this.scheduledEnd === this.totalFrames)); }
   emit() { this.onChange?.({ playing: this.playing, buffering: this.buffering, selected: this.target?.id, pending: this.requested?.id }); }
+  ensureContext() {
+    if (this.context) return;
+    const seconds = this.position;
+    this.context = new AudioContext();
+    this.anchorFrame = Math.round(seconds * this.rate);
+  }
   async play() {
     if (!this.source) return;
     const revision = this.revision;
     const seconds = this.position;
-    this.context ||= new AudioContext();
+    this.ensureContext();
     await this.context.resume();
     if (revision !== this.revision) return;
     this.anchorFrame = Math.round(seconds * this.rate);
-    if (this.anchorFrame >= this.totalFrames) this.anchorFrame = 0;
+    if (this.anchorFrame >= this.totalFrames) { this.anchorFrame = 0; this.cache = []; }
     this.playing = true;
     this.buffering = true;
     this.emit();
@@ -146,7 +175,7 @@ export class Player {
   select(pattern) {
     if (!this.source) return;
     const shared = !pattern || samePreview(pattern.config, this.source);
-    const target = { id: pattern?.id || 'reference', key: shared ? 'reference' : pattern.id, reference: shared, codec: pattern?.config.codec, channels: shared ? this.source.channels : pattern.config.channels, blob: shared ? this.source.file : pattern.blob };
+    const target = { id: pattern?.id || 'reference', key: shared ? 'reference' : pattern.id, reference: shared, codec: pattern?.config.codec, bitrate: pattern?.config.bitrate, rate: pattern?.config.rate, frameDuration: pattern?.config.frameDuration, channels: shared ? this.source.channels : pattern.config.channels, blob: shared ? this.source.file : pattern.blob };
     if (!target.blob) return;
     if (!this.playing || target.key === this.target.key) {
       this.target = target;
@@ -157,26 +186,39 @@ export class Player {
     this.pump();
   }
   async decode(target, start, revision) {
+    start = Math.floor(start / (4 * this.rate)) * 4 * this.rate;
     const frames = Math.min(this.totalFrames - start, Math.round(this.chunkSeconds * this.rate));
     const engine = this.engine, begin = performance.now();
-    await engine.mount(target.blob);
-    await engine.run(chunkArgs(this.source, target, start, frames, this.rate));
-    const data = await engine.ffmpeg.readFile('/chunk.f32');
-    await engine.ffmpeg.deleteFile('/chunk.f32');
+    const buffer = await engine.decode(this.source, target, start, frames, this.context);
     if (revision !== this.revision) return null;
-    const samples = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
-    const received = samples.length / target.channels;
-    if (received < frames - 2) throw Error('必要な再生区間を復号できませんでした。この音源では正確な区間再生に対応できません。');
-    const buffer = this.context.createBuffer(target.channels, frames, this.rate);
-    for (let ch = 0; ch < target.channels; ch++) {
-      const out = buffer.getChannelData(ch);
-      for (let i = 0; i < Math.min(frames, received); i++) out[i] = samples[i * target.channels + ch];
-    }
     // ponytail: 前回の復号時間だけで調整する。上限16秒。継続的に間に合わない場合は待機する。
-    this.chunkSeconds = Math.max(4, Math.min(16, Math.ceil((performance.now() - begin) / 1000 * 4)));
+    this.chunkSeconds = Math.max(4, Math.min(16, Math.ceil((performance.now() - begin) / 1000) * 4));
     const chunk = { key: target.key, start, end: start + frames, buffer };
     this.cache.push(chunk);
     return chunk;
+  }
+  analysisChunk(target, start, frames) {
+    if (!this.source || frames <= 0 || start < 0 || start + frames > this.totalFrames) return null;
+    const cached = this.cache.find(c => c.key === target.key && c.start <= start && c.end >= start + frames);
+    if (cached) return cached;
+    // 区間境界をまたぐ場合も、既存の現在区間＋次区間から取り出す。
+    const pieces = [];
+    let cursor = start;
+    while (cursor < start + frames) {
+      const piece = this.cache.find(c => c.key === target.key && c.start <= cursor && c.end > cursor);
+      if (!piece) break;
+      pieces.push({ chunk: piece, from: cursor, end: Math.min(piece.end, start + frames) });
+      cursor = Math.min(piece.end, start + frames);
+    }
+    if (cursor === start + frames) {
+      const buffer = this.context.createBuffer(target.channels, frames, this.rate);
+      for (let ch = 0; ch < target.channels; ch++) for (const piece of pieces) {
+        buffer.getChannelData(ch).set(piece.chunk.buffer.getChannelData(ch).subarray(piece.from - piece.chunk.start, piece.end - piece.chunk.start), piece.from - start);
+      }
+      return { key: target.key, start, end: start + frames, buffer };
+    }
+    // グラフの要求では再生用Workerを使わない。不足分は変換側の空き時間に復号する。
+    return null;
   }
   schedule(chunk, start, when) {
     const node = this.context.createBufferSource();

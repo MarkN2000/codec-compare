@@ -1,9 +1,43 @@
-import { CODECS, LIMITS, defaults, ratesFor, bitratesFor, validateConfig, description, metrics, timeLabel, sizeLabel } from './model.js';
+import { CODECS, LIMITS, defaults, ratesFor, bitratesFor, cutoffsFor, validateConfig, description, metrics, timeLabel, sizeLabel } from './model.js';
 import { Engine, Player } from './audio.js';
+import { ComparisonGraph } from './graph.js';
 
 const $ = id => document.getElementById(id);
+const actionIcons = {
+  edit: '<svg viewBox="0 0 1024 1024" aria-hidden="true"><path fill="currentColor" d="m924.8 625.7l-65.5-56c3.1-19 4.7-38.4 4.7-57.8s-1.6-38.8-4.7-57.8l65.5-56a32.03 32.03 0 0 0 9.3-35.2l-.9-2.6a443.7 443.7 0 0 0-79.7-137.9l-1.8-2.1a32.12 32.12 0 0 0-35.1-9.5l-81.3 28.9c-30-24.6-63.5-44-99.7-57.6l-15.7-85a32.05 32.05 0 0 0-25.8-25.7l-2.7-.5c-52.1-9.4-106.9-9.4-159 0l-2.7.5a32.05 32.05 0 0 0-25.8 25.7l-15.8 85.4a351.9 351.9 0 0 0-99 57.4l-81.9-29.1a32 32 0 0 0-35.1 9.5l-1.8 2.1a446 446 0 0 0-79.7 137.9l-.9 2.6c-4.5 12.5-.8 26.5 9.3 35.2l66.3 56.6c-3.1 18.8-4.6 38-4.6 57.1c0 19.2 1.5 38.4 4.6 57.1L99 625.5a32.03 32.03 0 0 0-9.3 35.2l.9 2.6c18.1 50.4 44.9 96.9 79.7 137.9l1.8 2.1a32.12 32.12 0 0 0 35.1 9.5l81.9-29.1c29.8 24.5 63.1 43.9 99 57.4l15.8 85.4a32.05 32.05 0 0 0 25.8 25.7l2.7.5a449.4 449.4 0 0 0 159 0l2.7-.5a32.05 32.05 0 0 0 25.8-25.7l15.7-85a350 350 0 0 0 99.7-57.6l81.3 28.9a32 32 0 0 0 35.1-9.5l1.8-2.1c34.8-41.1 61.6-87.5 79.7-137.9l.9-2.6c4.5-12.3.8-26.3-9.3-35M788.3 465.9c2.5 15.1 3.8 30.6 3.8 46.1s-1.3 31-3.8 46.1l-6.6 40.1l74.7 63.9a370 370 0 0 1-42.6 73.6L721 702.8l-31.4 25.8c-23.9 19.6-50.5 35-79.3 45.8l-38.1 14.3l-17.9 97a377.5 377.5 0 0 1-85 0l-17.9-97.2l-37.8-14.5c-28.5-10.8-55-26.2-78.7-45.7l-31.4-25.9l-93.4 33.2c-17-22.9-31.2-47.6-42.6-73.6l75.5-64.5l-6.5-40c-2.4-14.9-3.7-30.3-3.7-45.5c0-15.3 1.2-30.6 3.7-45.5l6.5-40l-75.5-64.5c11.3-26.1 25.6-50.7 42.6-73.6l93.4 33.2l31.4-25.9c23.7-19.5 50.2-34.9 78.7-45.7l37.9-14.3l17.9-97.2c28.1-3.2 56.8-3.2 85 0l17.9 97l38.1 14.3c28.7 10.8 55.4 26.2 79.3 45.8l31.4 25.8l92.8-32.9c17 22.9 31.2 47.6 42.6 73.6L781.8 426zM512 326c-97.2 0-176 78.8-176 176s78.8 176 176 176s176-78.8 176-176s-78.8-176-176-176m79.2 255.2A111.6 111.6 0 0 1 512 614c-29.9 0-58-11.7-79.2-32.8A111.6 111.6 0 0 1 400 502c0-29.9 11.7-58 32.8-79.2C454 401.6 482.1 390 512 390s58 11.6 79.2 32.8A111.6 111.6 0 0 1 624 502c0 29.9-11.7 58-32.8 79.2"/></svg>',
+  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M5 16.25a.75.75 0 0 1 .75.75v2c0 .138.112.25.25.25h12a.25.25 0 0 0 .25-.25v-2a.75.75 0 0 1 1.5 0v2A1.75 1.75 0 0 1 18 20.75H6A1.75 1.75 0 0 1 4.25 19v-2a.75.75 0 0 1 .75-.75" clip-rule="evenodd"/><path fill="currentColor" d="M10.738 3.75a.99.99 0 0 0-.988.906a37 37 0 0 0-.082 5.27q-.37.02-.74.047l-1.49.109a.76.76 0 0 0-.585 1.167a15.6 15.6 0 0 0 4.032 4.258l.597.429a.89.89 0 0 0 1.036 0l.597-.429a15.6 15.6 0 0 0 4.032-4.258a.76.76 0 0 0-.585-1.167l-1.49-.109a42 42 0 0 0-.74-.047a37 37 0 0 0-.081-5.27a.99.99 0 0 0-.989-.906z"/></svg>',
+};
 let source = null, patterns = [], session = 0, encoding = false, encoder = null, editing = null, draft = null;
 let playback = {}, player = makePlayer();
+let graphDecoder = null, graphBusy = false;
+const graph = new ComparisonGraph(() => player, () => {
+  const pattern = patterns.find(p => p.id === playback.selected);
+  return pattern ? `${CODECS[pattern.config.codec].name} · ${description(pattern.config)}` : '基準PCM';
+}, readGraphChunk, releaseGraphDecoder);
+function releaseGraphDecoder() {
+  graphDecoder?.terminate(); graphDecoder = null; graphBusy = false;
+}
+async function readGraphChunk(instance, target, start, frames) {
+  const cached = instance.analysisChunk(target, start, frames);
+  if (cached) return cached;
+  if (instance.playing && target.key === instance.target.key) return null;
+  if (instance !== player || !source || encoder || encoding || graphBusy ||
+    patterns.some(p => p.state === 'queued') || instance.requested || !instance.canEncode ||
+    (instance.playing && instance.ahead < 4 && instance.scheduledEnd !== instance.totalFrames)) return null;
+  const engine = graphDecoder ||= new Engine();
+  const revision = instance.revision;
+  graphBusy = true;
+  try {
+    const buffer = await engine.decode(instance.source, target, start, frames, instance.context);
+    if (engine !== graphDecoder || instance !== player || revision !== instance.revision) return null;
+    const chunk = { key: target.key, start, end: start + frames, buffer };
+    if (!instance.playing && target.key === instance.target.key) instance.cache = [
+      ...instance.cache.filter(c => c.key === target.key && c.end > instance.frame && c.start !== start), chunk,
+    ].slice(-2);
+    return chunk;
+  } catch (error) { if (!engine.closed) throw error; return null; }
+  finally { if (graphDecoder === engine) graphBusy = false; }
+}
 function message(text = '') { $('notice').textContent = text; $('notice').hidden = !text; }
 function failure(error) { message(error instanceof Error ? error.message : String(error)); }
 function makePlayer() {
@@ -60,10 +94,11 @@ function render() {
       for (const el of row.querySelectorAll('.cc-metric')) el.textContent = '—';
     }
     if (!isReference) {
-      for (const [action, label, symbol] of [['edit', '設定を変更', '⚙'], ['download', 'ダウンロード', '↓'], ['remove', '削除', '×']]) {
+      for (const [action, label] of [['edit', '設定を変更'], ['download', 'ダウンロード'], ['remove', '削除']]) {
         const button = document.createElement('button');
         button.className = 'cc-icon';
-        button.textContent = symbol;
+        if (actionIcons[action]) button.innerHTML = actionIcons[action];
+        else button.textContent = '×';
         button.setAttribute('aria-label', `${name}：${label}`);
         button.title = label;
         button.dataset.focus = `${pattern.id}-${action}`;
@@ -78,15 +113,17 @@ function render() {
 }
 async function loadFile(file) {
   if (!file) return;
-  if (!file.size || file.size > LIMITS.input) { failure(Error('音源は0バイトより大きく、256 MiB以下のファイルを選択してください。')); return; }
+  if (!file.size || file.size > LIMITS.input) { failure(Error('音源は0バイトより大きく、512 MiB以下のファイルを選択してください。')); return; }
   const current = ++session;
+  graph.reset();
   encoder?.terminate();
   player.dispose();
   source = null;
-  patterns = [];
+  patterns = patterns.map(({ id, config }) => ({ id, config: { ...config }, state: 'queued' }));
   encoding = false;
   player = makePlayer();
   $('editor').hidden = true;
+  editing = draft = null;
   $('patterns').replaceChildren();
   for (const id of ['play', 'seek', 'add']) $(id).disabled = true;
   $('filename').textContent = file.name;
@@ -111,6 +148,7 @@ async function loadFile(file) {
     message();
   } catch (error) { if (current === session) { failure(error); $('source-info').textContent = '読み込めませんでした。音源を変更してください。'; } }
   finally { engine.terminate(); if (encoder === engine) encoder = null; }
+  if (current === session && source) queue();
 }
 function field(key, label, options, value = draft[key]) {
   const wrapper = document.createElement('label'); wrapper.className = 'cc-field';
@@ -118,12 +156,14 @@ function field(key, label, options, value = draft[key]) {
   const select = document.createElement('select'); select.name = key;
   for (const item of options) { const [v, text] = Array.isArray(item) ? item : [item, item]; select.add(new Option(String(text), String(v))); }
   select.value = String(value);
+  select.disabled = options.length === 1;
   wrapper.append(select); $('fields').append(wrapper);
   select.addEventListener('change', () => {
     if (key === 'codec') draft = defaults(select.value, source);
     else draft[key] = ['mode'].includes(key) ? select.value : Number(select.value);
     if (!bitratesFor(draft).includes(draft.bitrate)) draft.bitrate = bitratesFor(draft).at(-1);
-    if (['codec', 'mode', 'rate'].includes(key)) { fields(); $('fields').querySelector(`[name="${key}"]`).focus(); }
+    if (key === 'rate' && !cutoffsFor(draft).includes(draft.cutoff)) draft.cutoff = 0;
+    if (['codec', 'mode', 'rate', 'channels', 'frameDuration'].includes(key)) { fields(); $('fields').querySelector(`[name="${key}"]`).focus(); }
   });
 }
 function fields() {
@@ -131,10 +171,12 @@ function fields() {
   const c = CODECS[draft.codec];
   field('codec', '形式', Object.entries(CODECS).map(([id, codec]) => [id, codec.name]));
   if (c.modes) field('mode', 'モード', c.modes);
+  if (c.frameDurations) field('frameDuration', 'フレーム長', c.frameDurations.map(n => [n, `${n} ms`]));
   if (c.bits && !(draft.codec === 'mp3' && draft.mode === 'VBR')) field('bitrate', draft.codec === 'aac' ? '平均ビットレート' : 'ビットレート', bitratesFor(draft).map(n => [n, `${n} kbps`]));
   if (c.qualities && (draft.codec === 'vorbis' || draft.mode === 'VBR')) field('quality', draft.codec === 'mp3' ? '品質（0が最高）' : '品質（10が最高）', c.qualities);
   field('rate', 'サンプルレート', ratesFor(draft.codec, source.rate).map(n => [n, `${n.toLocaleString()} Hz${n === source.rate ? '（元音源）' : ''}`]));
-  field('channels', 'チャンネル', [[1, 'モノラル'], [2, 'ステレオ']]);
+  if (c.cutoffs) field('cutoff', 'カットオフ', cutoffsFor(draft).map(n => [n, n ? `${n.toLocaleString()} Hz` : '自動']), draft.cutoff ?? 0);
+  field('channels', 'チャンネル', (c.channels || [1, 2]).map(n => [n, n === 1 ? 'モノラル' : 'ステレオ']));
   if (c.depths) field('depth', 'ビット深度', c.depths.map(n => [n, `${n} bit`]));
   if (c.levels) field('level', '圧縮レベル', c.levels);
 }
@@ -163,9 +205,10 @@ function act(action, pattern) {
   render();
 }
 async function queue() {
-  if (encoding || !source || !player.canEncode) return;
+  if (encoding || graphBusy || !source || !player.canEncode) return;
   const pattern = patterns.find(p => p.state === 'queued');
   if (!pattern) return;
+  releaseGraphDecoder();
   encoding = true;
   const current = session, config = pattern.config, engine = encoder = new Engine();
   pattern.state = 'encoding';
@@ -182,7 +225,7 @@ async function queue() {
   try {
     const blob = await engine.encode(source, config);
     if (current !== session || !patterns.includes(pattern) || pattern.config !== config) return;
-    if (source.file.size + patterns.reduce((n, p) => n + (p.blob?.size || 0), 0) + blob.size > LIMITS.total) throw Error('合計保持量が512 MiBを超えます。不要なパターンを削除してください。');
+    if (source.file.size + patterns.reduce((n, p) => n + (p.blob?.size || 0), 0) + blob.size > LIMITS.total) throw Error('合計保持量が1 GiBを超えます。不要なパターンを削除してください。');
     pattern.blob = blob;
     pattern.state = 'ready';
   } catch (error) {
@@ -232,5 +275,6 @@ document.addEventListener('drop', event => {
 setInterval(() => {
   if (!seeking) { $('position').textContent = timeLabel(player.position); $('seek').value = player.position; }
   queue();
+  graph.tick();
 }, 150);
-window.addEventListener('pagehide', event => { if (!event.persisted) { encoder?.terminate(); player.dispose(); } else player.pause(); });
+window.addEventListener('pagehide', event => { graph.reset(); if (!event.persisted) { encoder?.terminate(); player.dispose(); } else player.pause(); });
