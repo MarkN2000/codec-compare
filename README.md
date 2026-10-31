@@ -79,8 +79,8 @@ npm test
 
 ## 公開
 
-[公開サイト](https://markn2000.github.io/kikikurabe/)（GitHub Pages）。リポジトリは公開設定です。
+[公開サイト](https://kikikurabe.markn2000.com/)（GitHub Pages＋独自ドメイン）。リポジトリは公開設定です。
 
-更新時はGitHub Actionsの「GitHub Pagesへ公開」を手動実行します。テストとビルドに成功した成果物を公開します。独自ドメインはSettings → Pagesで指定します。ドメイン名はまだ未指定です。
+更新時はGitHub Actionsの「GitHub Pagesへ公開」を手動実行します。テストとビルドに成功した成果物を公開します。独自ドメインは `kikikurabe.markn2000.com`。共有用URL・canonical・OGP画像もHTTPSの独自ドメインを直接参照します。
 
 音声コアのライセンス文書はビルド成果物の `licenses/` に含め、サイトにも同梱します。ライブラリのソースとビルド手順は `scripts/core.Dockerfile` を参照してください。

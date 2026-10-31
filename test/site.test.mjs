@@ -8,6 +8,12 @@ test('公開ビルドでHTML・依存モジュール・FFT Workerの版を揃え
   await promisify(execFile)(process.execPath, ['scripts/site.mjs', 'build']);
   const built = name => readFile(new URL(`../dist/${name}`, import.meta.url), 'utf8');
   const html = await built('index.html');
+  assert.ok(html.includes('<link rel="canonical" href="https://kikikurabe.markn2000.com/">'));
+  assert.ok(html.includes('<meta property="og:url" content="https://kikikurabe.markn2000.com/">'));
+  for (const tag of ['property="og:image"', 'name="twitter:image"']) {
+    assert.ok(html.includes(`<meta ${tag} content="https://kikikurabe.markn2000.com/ogp.png">`));
+  }
+  assert.ok(!html.includes('markn2000.github.io'), '公開メタデータに旧URLを残さない');
   const version = html.match(/src="\.\/app\.js\?v=([a-f0-9]{12})"/)?.[1];
   assert.ok(version, '入口のJavaScriptに版情報を付ける');
   assert.ok(html.includes(`./style.css?v=${version}`));
