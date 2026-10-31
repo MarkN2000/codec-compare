@@ -99,7 +99,8 @@ export function chunkArgs(source, target, start, frames, rate, input = '/input/a
   const seek = fromStart ? 0 : Math.max(0, Math.floor(start / rate) - 1);
   const delay = target.reference ? 0 : codecDelay(target);
   const filters = [target.reference ? commonFilter(source) : '', delay ? `atrim=start_sample=${delay},asetpts=PTS-STARTPTS` : '', `aresample=${rate}`, `atrim=start_sample=${start - seek * rate}:end_sample=${start - seek * rate + frames}`, 'asetpts=PTS-STARTPTS'].filter(Boolean);
-  return ['-v', 'error', ...(fromStart ? [] : ['-ss', String(seek)]), ...((target.reference ? source.codec : target.codec) === 'sbc' ? ['-f', 'sbc'] : []), '-i', input, '-map', '0:a:0', '-vn', '-af', filters.join(','), '-t', String(frames / rate), '-ac', String(target.channels), '-c:a', 'pcm_f32le', '-f', 'f32le', output];
+  // atrimで必要数を切り出す。-tを重ねるとフレーム時刻の揺れで末尾が欠ける。
+  return ['-v', 'error', ...(fromStart ? [] : ['-ss', String(seek)]), ...((target.reference ? source.codec : target.codec) === 'sbc' ? ['-f', 'sbc'] : []), '-i', input, '-map', '0:a:0', '-vn', '-af', filters.join(','), '-ac', String(target.channels), '-c:a', 'pcm_f32le', '-f', 'f32le', output];
 }
 export function metrics(bytes, source) {
   const ratio = bytes / (source.frames * source.channels * 3) * 100;
