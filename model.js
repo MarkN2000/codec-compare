@@ -51,7 +51,12 @@ export function validateConfig(c, source) {
 }
 export function commonFilter(source) {
   // ponytail: aeval は毎サンプル評価。高レートで遅い場合は24 bit量子化専用フィルターへ置換する。
-  return `aformat=sample_fmts=dblp:channel_layouts=${source.channels === 1 ? 'mono' : 'stereo'},aeval='clip(floor(val(ch)*8388608+0.5),-8388608,8388607)/8388608':c=same`;
+  const exact = source.originalChannels === source.channels && [1, 2].includes(source.channels) &&
+    (!source.layout || source.layout === (source.channels === 1 ? 'mono' : 'stereo')) &&
+    (/^pcm_[su](?:8|16(?:le|be)|24(?:le|be))$/.test(source.codec || '') ||
+      (source.codec === 'flac' && Number.isInteger(source.bits) && source.bits > 0 && source.bits <= 24));
+  return `aformat=sample_fmts=dblp:channel_layouts=${source.channels === 1 ? 'mono' : 'stereo'}` +
+    (exact ? '' : `,aeval='clip(floor(val(ch)*8388608+0.5),-8388608,8388607)/8388608':c=same`);
 }
 export function codecDelay(c) {
   if (c.codec === 'lc3') return Math.round(c.rate * (c.frameDuration === 7.5 ? .004 : .0025));

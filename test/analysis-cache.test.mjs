@@ -109,7 +109,7 @@ test('グラフ復号はまとめ処理と再利用を行い、遅い実測で�
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8'), calls = [];
   let clock = 0, pending = null;
   const instance = { source: {}, analysisChunk: () => null, totalFrames: 48000 * 300, rate: 48000,
-    revision: 1, context: {}, playing: false, canEncode: true, frame: 0, cache: [], target: { key: 'selected' } };
+    revision: 1, context: {}, playing: false, canEncode: true, frame: 0, cache: [], target: { key: 'selected' }, keepReference() {} };
   const context = vm.createContext({
     source: instance.source, player: instance, encoder: null, encoding: false, graphBusy: false, graphDecoder: null,
     graphChunks: [], graphDecodeCost: 0, patterns: [], graph: { stats: { decodes: 0 } }, performance: { now: () => clock },

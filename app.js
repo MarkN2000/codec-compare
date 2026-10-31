@@ -28,7 +28,7 @@ async function readGraphChunk(instance, target, start, frames) {
   const cached = instance.analysisChunk(target, start, frames);
   if (cached) return cached;
   const prepared = preparedGraphChunk(target, start, frames);
-  if (prepared) return prepared;
+  if (prepared) { instance.keepReference(prepared); return prepared; }
   if (instance.playing && target.key === instance.target.key && (instance.busy || start < instance.scheduledEnd || instance.ahead < 6)) return null;
   if (instance !== player || !source || encoder || encoding || graphBusy ||
     patterns.some(p => p.state === 'queued') || instance.requested || !instance.canEncode ||
@@ -48,6 +48,7 @@ async function readGraphChunk(instance, target, start, frames) {
     graphDecodeCost = elapsed * Math.min(1, instance.rate * 4 / count);
     graph.stats.decodeMs = elapsed; graph.stats.decodes++;
     const chunk = { key: target.key, blob: target.blob, start, end: start + count, buffer };
+    instance.keepReference(chunk);
     graphChunks = [...graphChunks.filter(c => c.blob !== target.blob), chunk].slice(-2);
     if (!instance.playing && target.key === instance.target.key) instance.cache = [
       ...instance.cache.filter(c => c.key === target.key && c.end > instance.frame && c.start !== start), chunk,

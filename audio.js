@@ -49,7 +49,7 @@ export class Engine {
     try { await this.run(['-v', 'info', ...inputOptions, '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
     finally { this.onLog = null; }
     if (!frames) throw Error('音声サンプルを読み取れませんでした。');
-    const source = { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null, frames, duration: frames / rate };
+    const source = { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, layout: info.channel_layout || null, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null, frames, duration: frames / rate };
     await this.preparePCM(source, { reference: true, blob: file, channels: source.channels });
     return source;
   }
@@ -119,6 +119,7 @@ export class Player {
     this.revision = 0;
     this.nodes = new Set();
     this.cache = [];
+    this.referenceCache = [];
     this.playing = false;
     this.loop = false;
     this.buffering = false;
@@ -135,6 +136,7 @@ export class Player {
     this.target = { id: 'reference', key: 'reference', reference: true, channels: source.channels, blob: source.file };
     this.requested = null;
     this.cache = [];
+    this.referenceCache = [];
     this.anchorFrame = 0;
     this.chunkSeconds = 8;
     this.emit();
@@ -162,7 +164,7 @@ export class Player {
     await this.context.resume();
     if (revision !== this.revision) return;
     this.anchorFrame = Math.round(seconds * this.rate);
-    if (this.anchorFrame >= this.totalFrames) { this.anchorFrame = 0; this.cache = []; }
+    if (this.anchorFrame >= this.totalFrames) { this.anchorFrame = 0; this.cache = []; this.referenceCache = []; }
     this.playing = true;
     this.buffering = true;
     this.emit();
@@ -194,6 +196,7 @@ export class Player {
     this.stopNodes();
     this.anchorFrame = Math.round(Math.max(0, Math.min(seconds, this.source.duration)) * this.rate);
     this.cache = [];
+    this.referenceCache = [];
     this.buffering = this.playing;
     this.emit();
     this.pump();
@@ -211,28 +214,37 @@ export class Player {
     this.emit();
     this.pump();
   }
-  async decode(target, start, revision) {
+  keepReference(chunk) {
+    if (chunk.key !== 'reference') return;
+    const frame = this.frame;
+    chunk = this.referenceCache.find(c => c.start <= chunk.start && c.end >= chunk.end) || chunk;
+    this.referenceCache = [...this.referenceCache.filter(c => c.start < chunk.start || c.end > chunk.end), chunk]
+      .filter(c => c.end > frame).sort((a, b) => a.start - b.start).slice(0, 2);
+  }
+  async decode(target, start, revision, seconds = this.chunkSeconds) {
     start = Math.floor(start / (4 * this.rate)) * 4 * this.rate;
-    const frames = Math.min(this.totalFrames - start, Math.round(this.chunkSeconds * this.rate));
+    const frames = Math.min(this.totalFrames - start, Math.round(seconds * this.rate));
     const engine = this.engine, begin = performance.now();
-    const prepared = this.readPrepared?.(target, start, frames);
+    const prepared = this.analysisChunk(target, start, frames) || this.readPrepared?.(target, start, frames);
     const buffer = prepared?.buffer || await engine.decode(this.source, target, start, frames, this.context);
     if (revision !== this.revision) return null;
     // ponytail: 前回の復号時間だけで調整する。上限16秒。継続的に間に合わない場合は待機する。
     if (!prepared) this.chunkSeconds = Math.max(4, Math.min(16, Math.ceil((performance.now() - begin) / 1000) * 4));
     const chunk = { key: target.key, start: prepared?.start ?? start, end: prepared?.end ?? start + frames, buffer };
     this.cache.push(chunk);
+    this.keepReference(chunk);
     return chunk;
   }
   analysisChunk(target, start, frames) {
     if (!this.source || frames <= 0 || start < 0 || start + frames > this.totalFrames) return null;
-    const cached = this.cache.find(c => c.key === target.key && c.start <= start && c.end >= start + frames);
+    const chunks = target.key === 'reference' ? [...this.cache, ...this.referenceCache] : this.cache;
+    const cached = chunks.find(c => c.key === target.key && c.start <= start && c.end >= start + frames);
     if (cached) return cached;
     // 区間境界をまたぐ場合も、既存の現在区間＋次区間から取り出す。
     const pieces = [];
     let cursor = start;
     while (cursor < start + frames) {
-      const piece = this.cache.find(c => c.key === target.key && c.start <= cursor && c.end > cursor);
+      const piece = chunks.find(c => c.key === target.key && c.start <= cursor && c.end > cursor);
       if (!piece) break;
       pieces.push({ chunk: piece, from: cursor, end: Math.min(piece.end, start + frames) });
       cursor = Math.min(piece.end, start + frames);
@@ -307,8 +319,10 @@ export class Player {
       }
       if (this.requested) {
         const target = this.requested;
-        const start = Math.max(0, this.frame - Math.round(this.rate * 0.1));
-        const chunk = await this.decode(target, start, revision);
+        const start = this.frame;
+        const offset = start % (4 * this.rate) / this.rate;
+        const seconds = Math.min(16, Math.ceil((offset + Math.max(1, this.chunkSeconds / 4)) / 4) * 4);
+        const chunk = await this.decode(target, start, revision, seconds);
         if (!chunk || revision !== this.revision || this.requested !== target) return;
         const when = this.context.currentTime + 0.025;
         const switchFrame = this.anchorFrame + Math.round((when - this.anchorTime) * this.rate);
