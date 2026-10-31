@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spectrumFrames, FFT_SIZE } from '../analysis.js';
+import { spectrumFrames, compactFrames, spectrumSteps, FFT_SIZE } from '../analysis.js';
 import { melAt, melPosition, timePosition, fftColumns, averageSpectrum, bandDifference, frameBandDifferences, differenceColor, ComparisonGraph } from '../graph.js';
 import { Player } from '../audio.js';
 
@@ -11,14 +11,14 @@ test('周波数とdBFSを校正し、逆位相ステレオ・無音・短い音�
   const stereo = spectrumFrames([tone, tone.map(v => -v)], rate);
   assert.deepEqual(mono.powers, stereo.powers, '逆位相でも音が相殺されない');
   const db = averageSpectrum(mono, .5);
-  assert.equal(db.indexOf(Math.max(...db)), bin, '1,500 Hzの位置');
+  assert.equal(db.indexOf(Math.max(...db)), bin, 'FFTのビンと周波数の対応');
   assert.ok(Math.abs(db[bin] + 6.0206) < .001, '振幅0.5は約−6 dBFS');
   const quiet = averageSpectrum(spectrumFrames([tone.map(v => v / 10)], rate), .5);
   assert.ok(Math.abs(db[bin] - quiet[bin] - 20) < .001, '音源別の自動正規化をしない');
   // FFTとは別の直接DFTで、ビンに一致しない音の周辺と漏れ成分も照合する。
   const offBin = Float32Array.from({ length: FFT_SIZE }, (_, i) => .3 * Math.sin(2 * Math.PI * 440 * i / rate));
   const measured = spectrumFrames([offBin], rate);
-  for (const k of [1, 36, 37, 38, 60]) {
+  for (const k of [1, 17, 18, 19, 20, 60]) {
     let real = 0, imaginary = 0, weight = 0;
     for (let i = 0; i < FFT_SIZE; i++) {
       const w = .5 - .5 * Math.cos(2 * Math.PI * i / (FFT_SIZE - 1));
@@ -231,8 +231,8 @@ test('2つのグラフは同じFFT結果と位置を描き、差分画像を再�
     graph.draw(500, 2, 'Opus');
     assert.match(graph.frequencyCanvas.attributes['aria-label'], /周波数スペクトル.*4.0–8.0 秒/);
     assert.match(graph.canvas.attributes['aria-label'], /時間×周波数の差分.*4.0–8.0 秒/);
-    assert.equal(images, 1, '再生位置が進んでも差分画像を作り直さない');
-    assert.deepEqual(graph.canvas.context.images, [image, image]);
+    assert.equal(images, 2, '軸の背景と差分画像をそれぞれ1回だけ作る');
+    assert.deepEqual(graph.canvas.context.images, [image], '位置の線を動かすために差分画像を再描画しない');
     assert.equal(graph.frequencyCanvas.width, 500);
     assert.equal(graph.canvas.width, 500);
     assert.ok(graph.canvas.context.labels.includes('4.0 s'));
@@ -240,124 +240,93 @@ test('2つのグラフは同じFFT結果と位置を描き、差分画像を再�
   } finally { globalThis.document = previousDocument; globalThis.window = previousWindow; }
 });
 
-test('次区間の先読み・余裕不足での休止と自動再開・表示保持・折りたたみ時の破棄', async () => {
+test('先読み・FFT休止再開・基準共有・停止中の先行生成・再試行を扱う', async () => {
   const previousDocument = globalThis.document, previousWorker = globalThis.Worker;
   const elements = Object.fromEntries(['graph', 'graph-plots', 'frequency-canvas', 'graph-canvas', 'graph-status', 'graph-selected'].map(id =>
     [id, { events: {}, addEventListener(name, fn) { this.events[name] = fn; }, hidden: true, open: false, parentElement: { clientWidth: 500 } }]));
-  let decoded = 0, drawn = 0, worker, available = true, released = 0;
+  let worker, auto = false, available = true, fail = false, decoded = 0, released = 0, drawn = 0;
+  const starts = [];
   globalThis.document = { hidden: false, getElementById: id => elements[id], addEventListener() {} };
   globalThis.Worker = class {
     constructor() { worker = this; }
-    postMessage(data) { this.inputs = data.channels; }
+    postMessage(data) {
+      if ('paused' in data) { this.paused = data.paused; return; }
+      this.inputs = data.channels;
+      this.finish = () => this.onmessage({ data: { results: data.channels.map(channels => compactFrames(spectrumFrames(channels, data.rate))), elapsedMs: 3 } });
+      if (auto) queueMicrotask(() => { if (!this.stopped) this.finish(); });
+    }
     terminate() { this.stopped = true; }
   };
-  const pcm = new Float32Array(48000 * 4);
-  const player = { source: { duration: 20, channels: 1 }, position: 0, rate: 48000, totalFrames: 48000 * 20, playing: true,
-    ahead: 8, scheduledEnd: 48000 * 8, buffering: false, target: { key: 'reference', reference: true }, ensureContext() {} };
-  const results = [{ length: pcm.length, rate: 48000 }];
+  const file = {}, selected = {};
+  const player = { source: { file, duration: 20, channels: 1 }, position: 0, rate: 48000, totalFrames: 48000 * 20,
+    playing: true, ahead: 8, scheduledEnd: 48000 * 8, buffering: false, target: { key: 'reference', reference: true, blob: file }, ensureContext() {} };
+  const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(setImmediate); };
   try {
-    const graph = new ComparisonGraph(() => player, () => player.target.key, async (_, target, start) => {
+    const graph = new ComparisonGraph(() => player, () => player.target.key, async (_, target, start, frames) => {
+      if (fail) { fail = false; throw Error('一時的な復号エラー'); }
       if (!available) return null;
-      // 再生キャッシュは分析区間より前から始まり、追加復号は分析開始位置から始まる場合。
       const leading = target.reference ? 0 : 48000;
-      const samples = Float32Array.from({ length: pcm.length + leading }, (_, i) => (start - leading + i) / 1048576);
-      decoded++; return { start: start - leading, buffer: { numberOfChannels: 1, getChannelData: () => samples } };
+      const samples = Float32Array.from({ length: frames + leading }, (_, i) => .1 * Math.sin((start - leading + i) * .01));
+      decoded++; starts.push(start / 48000);
+      return { start: start - leading, buffer: { numberOfChannels: 1, getChannelData: () => samples } };
     }, () => released++);
     graph.draw = () => drawn++;
     graph.tick(); assert.equal(decoded, 0);
-    elements.graph.open = true; graph.tick(); await new Promise(setImmediate);
-    assert.equal(decoded, 1); assert.equal(worker.inputs.length, 1, '同一PCMは1回だけ分析');
-    worker.onmessage({ data: { results } }); await new Promise(setImmediate);
-    graph.tick(); await new Promise(setImmediate);
-    assert.equal(graph.display.start, 0); assert.equal(decoded, 2, '次の4秒分を先読み');
-    assert.equal(graph.display.data[0].length / graph.display.data[0].rate, 4, '表示範囲は4秒');
-    const beforePause = { decoded, drawn, released, display: graph.display, position: graph.display.position };
-    const cancelledWorker = worker, lateResult = worker.onmessage;
-    player.ahead = 2; graph.tick();
-    assert.equal(graph.suspended, false, '2秒ちょうどでは休止しない');
-    player.ahead = 1.99; player.position = 1.5; graph.tick(); await new Promise(setImmediate);
-    assert.equal(graph.suspended, true);
-    assert.equal(cancelledWorker.stopped, true, '実行中のFFTを取り消す');
-    assert.equal(released, beforePause.released + 1, 'グラフ専用の追加復号を解放する');
-    assert.equal(graph.busy, false);
-    assert.equal(graph.display, beforePause.display, '表示済みのグラフを残す');
-    assert.equal(graph.display.position, beforePause.position, '休止中は位置の線を進めない');
-    assert.equal(graph.blocks.get(0), beforePause.display, '完成済みのFFT結果を残す');
-    assert.match(elements['graph-status'].textContent, /0.0–4.0 秒.*再生を優先してグラフを休止中/);
-    lateResult({ data: { results } }); await new Promise(setImmediate);
-    assert.equal(graph.blocks.has(4), false, '取り消したFFTの遅れた結果を採用しない');
-    for (const ahead of [0, 2, 3.99]) {
-      player.ahead = ahead; graph.tick(); await new Promise(setImmediate);
-      assert.equal(graph.suspended, true, '4秒に回復するまでは休止を維持する');
-      assert.equal(decoded, beforePause.decoded);
-      assert.equal(drawn, beforePause.drawn);
-      assert.equal(released, beforePause.released + 1, '休止中の各tickで取り消しを繰り返さない');
-      assert.equal(player.playing, true, 'グラフの休止で再生を止めない');
-    }
-    player.ahead = 4; graph.tick(); await new Promise(setImmediate);
-    assert.equal(graph.suspended, false);
-    assert.equal(graph.display.position, 1.5, '回復後は現在の再生位置から描画する');
-    assert.equal(decoded, beforePause.decoded + 1, '次区間の分析を再開する');
-    assert.notEqual(worker, cancelledWorker);
-    worker.onmessage({ data: { results } }); await new Promise(setImmediate);
-    player.ahead = 8;
-    player.position = 4.1; available = false; graph.tick(); await new Promise(setImmediate);
-    assert.equal(graph.display.start, 4, '境界に到達したら準備済みの結果に切り替える');
-    assert.equal(graph.display.data[0].length / graph.display.data[0].rate, 4, '移動後も表示範囲は4秒');
-    assert.equal(elements['graph-plots'].hidden, false);
-    const position = graph.display.position;
-    player.position = 8.1; graph.tick(); await new Promise(setImmediate);
-    assert.equal(graph.display.start, 4, '新しい区間が未準備でも消さない');
-    assert.equal(graph.display.position, position, '古い区間の再生位置を進めない');
+    elements.graph.open = true; graph.tick(); await settle();
+    assert.equal(decoded, 1); worker.finish(); await settle();
+    graph.tick(); await settle();
+    assert.equal(graph.display.start, 0); assert.equal(decoded, 2);
+    const pending = worker, before = { decoded, drawn, released, display: graph.display, position: graph.display.position };
+    player.ahead = 2; graph.tick(); assert.equal(graph.suspended, false);
+    player.ahead = 1.99; player.position = 1.5; graph.tick(); await settle();
+    assert.equal(graph.suspended, true); assert.equal(pending.paused, true);
+    assert.notEqual(pending.stopped, true, 'FFTの途中経過を捨てない');
+    assert.equal(graph.busy, true); assert.equal(released, before.released + 1);
+    assert.equal(graph.display, before.display); assert.equal(graph.display.position, before.position);
+    assert.match(elements['graph-status'].textContent, /再生を優先してグラフを休止中/);
+    for (const ahead of [0, 2, 3.99]) { player.ahead = ahead; graph.tick(); await settle(); }
+    assert.equal(decoded, before.decoded); assert.equal(drawn, before.drawn);
+    player.ahead = 4; graph.tick(); await settle();
+    assert.equal(graph.suspended, false); assert.equal(worker, pending); assert.equal(pending.paused, false);
+    worker.finish(); await settle();
+    available = false; player.ahead = 8; player.position = 4.1; graph.tick(); await settle();
+    assert.equal(graph.display.start, 4);
+    const frozen = graph.display.position;
+    player.position = 8.1; graph.tick(); await settle();
+    assert.equal(graph.display.start, 4); assert.equal(graph.display.position, frozen);
     assert.match(elements['graph-status'].textContent, /更新待ち/);
-    available = true; player.position = 19.9; graph.tick(); await new Promise(setImmediate);
-    const oldWorker = worker;
-    assert.equal(graph.busy, true, '末尾区間の分析結果を待っている');
-    player.position = 0; graph.tick(); await new Promise(setImmediate);
-    assert.equal(oldWorker.stopped, true, '再生し直しで古い分析待ちを取り消す');
-    assert.notEqual(worker, oldWorker);
-    assert.equal(graph.busy, true, '古い処理の完了で新しい処理の待機状態を上書きしない');
-    worker.onmessage({ data: { results } }); await new Promise(setImmediate);
-    player.playing = false; graph.tick();
-    assert.equal(graph.display.start, 0, '再生し直し後のグラフを更新できる');
-    assert.doesNotMatch(elements['graph-status'].textContent, /更新待ち/);
-    available = false;
-    player.target = { key: 'opus' }; graph.tick(); await new Promise(setImmediate);
-    assert.equal(elements['graph-selected'].textContent, 'reference', '表示中の音源名を偽らない');
-    available = true; graph.tick(); await new Promise(setImmediate);
-    assert.equal(worker.inputs.length, 2);
-    assert.deepEqual(worker.inputs[0][0], worker.inputs[1][0], '開始位置が異なるPCMから同じ時刻のサンプルを取り出す');
-    worker.onmessage({ data: { results: [{ ...results[0], role: 'selected' }, { ...results[0], role: 'reference' }] } });
-    await new Promise(setImmediate); graph.tick();
-    assert.equal(graph.display.data[0].role, 'reference', '差分の分母は基準PCM');
-    assert.equal(graph.display.data[1].role, 'selected', '差分の分子は選択音源');
-    const beforeNext = decoded;
-    player.playing = false; graph.tick(); await new Promise(setImmediate);
-    assert.equal(decoded, beforeNext, '停止中は表示外の次区間を新しく分析しない');
-    player.playing = true; graph.tick(); await new Promise(setImmediate);
-    assert.equal(decoded, beforeNext + 2, '再生中は次の4秒を準備する');
-    worker.onmessage({ data: { results: [results[0], results[0]] } }); await new Promise(setImmediate);
-    graph.tick();
-    assert.equal(graph.blocks.get(4).start, 4, '次の4秒をキャッシュする');
-    assert.equal(graph.blocks.size, 2, 'FFT結果は現在と次の4秒だけ保持する');
-    player.ahead = 1; player.buffering = true; graph.tick();
-    assert.equal(graph.suspended, true, 'バッファ待ちでも休止する');
-    player.scheduledEnd = player.totalFrames; player.buffering = false; graph.tick(); await new Promise(setImmediate);
-    assert.equal(graph.suspended, false, '末尾まで予約済みなら残量が少なくても再開できる');
-    player.scheduledEnd = 48000 * 8; graph.tick();
-    assert.equal(graph.suspended, true);
-    player.playing = false; graph.tick();
-    assert.equal(graph.suspended, false, '一時停止中も分析と描画を再開する');
-    player.playing = true; player.ahead = 8;
-    player.position = 18; graph.tick(); await new Promise(setImmediate);
-    worker.onmessage({ data: { results: [results[0], results[0]] } }); await new Promise(setImmediate);
-    graph.tick();
-    assert.equal(graph.display.start, 16, '末尾の4秒区間を表示する');
-    elements.graph.open = false; elements.graph.events.toggle(); await new Promise(setImmediate);
-    assert.equal(worker.stopped, true); assert.equal(graph.display, null); assert.equal(graph.busy, false);
-    assert.equal(graph.input, null); assert.equal(graph.blocks.size, 0); assert.ok(released > 0);
-    const before = decoded;
-    elements.graph.open = true; document.hidden = true; graph.tick();
-    assert.equal(decoded, before, '非表示では再開しない');
+    available = true; player.position = 19.9; graph.tick(); await settle();
+    const stale = worker, staleMessage = worker.onmessage;
+    player.position = 0; graph.tick(); await settle();
+    assert.equal(stale.stopped, true);
+    staleMessage({ data: { results: [{ length: 1, rate: 1 }] } }); await settle();
+    graph.tick(); assert.equal(graph.display.start, 0, '再生し直しはキャッシュから復帰する');
+    const prior = decoded;
+    player.target = { key: 'opus', blob: selected }; graph.tick(); await settle();
+    assert.equal(worker.inputs.length, 1, '選択音源を独立して分析する');
+    assert.equal(decoded, prior + 1);
+    worker.finish(); await settle(); graph.tick(); await settle();
+    assert.ok(graph.cache.stats.memoryHits > 0, '基準PCMの分析を再利用する');
+    assert.equal(graph.display.label, 'opus');
+    assert.equal(graph.display.data[0].bins, 1025);
+    auto = true; worker.finish(); await settle();
+    player.playing = false;
+    for (let i = 0; i < 8; i++) { graph.tick(); await settle(); }
+    assert.ok(starts.includes(12) && starts.includes(16), '停止中も先の区間を生成する');
+    assert.ok(graph.blocks.size <= 2, '表示中と次以外は分析キャッシュに任せる');
+    const warmed = decoded;
+    player.position = 12; graph.tick(); await settle(); graph.tick(); await settle();
+    assert.equal(graph.display.start, 12); assert.equal(decoded, warmed, '先行生成した区間を再復号しない');
+    player.target = { key: 'failure', blob: {} }; fail = true; graph.tick(); await settle();
+    assert.match(graph.error, /再試行待ち/); assert.ok(graph.retryAt > performance.now());
+    const failures = graph.stats.retries; graph.tick(); await settle();
+    assert.equal(graph.stats.retries, failures, '待機中にエラーを連打しない');
+    graph.retryAt = 0; graph.tick(); await settle(); graph.tick(); await settle();
+    assert.equal(graph.error, ''); assert.equal(graph.display.label, 'failure');
+    elements.graph.open = false; elements.graph.events.toggle(); await settle();
+    assert.equal(graph.display, null); assert.equal(graph.blocks.size, 0); assert.equal(graph.busy, false);
+    assert.ok(graph.cache.memory.size > 0, '折りたたみでも完成した分析は残す');
+    const stopped = decoded; elements.graph.open = true; document.hidden = true; graph.tick();
+    assert.equal(decoded, stopped);
   } finally { globalThis.document = previousDocument; globalThis.Worker = previousWorker; }
 });

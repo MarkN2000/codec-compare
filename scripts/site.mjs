@@ -1,4 +1,5 @@
-import { cp, mkdir, writeFile, stat } from 'node:fs/promises';
+import { cp, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { createServer } from 'node:http';
@@ -8,8 +9,16 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(root, 'dist');
 await mkdir(output, { recursive: true });
-for (const name of ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js', 'icon.svg', 'ogp.png']) {
+for (const name of ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js', 'analysis-cache.js', 'icon.svg', 'ogp.png']) {
   await cp(resolve(root, name), resolve(output, name));
+}
+const assets = ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js', 'analysis-cache.js'];
+const sources = new Map(await Promise.all(assets.map(async name => [name, (await readFile(resolve(root, name), 'utf8')).replaceAll('\r\n', '\n')])));
+const version = createHash('sha256').update([...sources].map(([name, content]) => `${name}\0${content}`).join('\0')).digest('hex').slice(0, 12);
+for (const [name, content] of sources) {
+  const versioned = content.replace(/(["'])\.\/([^"']+\.(?:js|css))\1/g,
+    (match, quote, file) => sources.has(file) ? `${quote}./${file}?v=${version}${quote}` : match);
+  await writeFile(resolve(output, name), versioned);
 }
 for (const [pkg, destination] of [['ffmpeg', 'ffmpeg'], ['core', 'core']]) {
   await mkdir(resolve(output, 'vendor', destination), { recursive: true });
@@ -27,7 +36,7 @@ if (process.argv[2] === 'serve') {
     try {
       const url = new URL(request.url, 'http://localhost');
       const path = decodeURIComponent(url.pathname);
-      const live = ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js'];
+      const live = ['index.html', 'style.css', 'app.js', 'audio.js', 'model.js', 'graph.js', 'analysis.js', 'analysis-cache.js'];
       const name = path === '/' ? 'index.html' : path.slice(1);
       const base = live.includes(name) ? root : output;
       const target = resolve(base, name);

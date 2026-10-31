@@ -10,30 +10,41 @@ const actionIcons = {
 let source = null, patterns = [], session = 0, encoding = false, encoder = null, editing = null, draft = null;
 let playback = {}, player = makePlayer();
 let graphDecoder = null, graphBusy = false;
+let graphChunks = [], graphDecodeCost = 0, graphDecodeStart = 0;
 const graph = new ComparisonGraph(() => player, () => {
   const pattern = patterns.find(p => p.id === playback.selected);
   return pattern ? `${CODECS[pattern.config.codec].name} · ${description(pattern.config)}` : '基準PCM';
 }, readGraphChunk, releaseGraphDecoder);
-function releaseGraphDecoder() {
+function releaseGraphDecoder(clear = false) {
+  if (graphBusy) graphDecodeCost = Math.max(graphDecodeCost, performance.now() - graphDecodeStart);
   graphDecoder?.terminate(); graphDecoder = null; graphBusy = false;
+  if (clear) graphChunks = [];
 }
 async function readGraphChunk(instance, target, start, frames) {
   const cached = instance.analysisChunk(target, start, frames);
   if (cached) return cached;
+  const prepared = graphChunks.find(c => c.blob === target.blob && c.start <= start && c.end >= start + frames);
+  if (prepared) return prepared;
   if (instance.playing && target.key === instance.target.key) return null;
   if (instance !== player || !source || encoder || encoding || graphBusy ||
     patterns.some(p => p.state === 'queued') || instance.requested || !instance.canEncode ||
-    (instance.playing && instance.ahead < 4 && instance.scheduledEnd !== instance.totalFrames)) return null;
+    (instance.playing && instance.ahead < Math.max(4, graphDecodeCost / 1000 + 2) && instance.scheduledEnd !== instance.totalFrames)) return null;
   const engine = graphDecoder ||= new Engine();
   const revision = instance.revision;
   graphBusy = true;
   try {
-    const buffer = await engine.decode(instance.source, target, start, frames, instance.context);
+    const seconds = instance.playing ? (instance.ahead >= Math.max(10, graphDecodeCost / 1000 * 2 + 2) ? 8 : 4) : 16;
+    const count = Math.min(instance.totalFrames - start, Math.max(frames, instance.rate * seconds));
+    const begin = graphDecodeStart = performance.now();
+    const buffer = await engine.decode(instance.source, target, start, count, instance.context);
     if (engine !== graphDecoder || instance !== player || revision !== instance.revision) return null;
-    const chunk = { key: target.key, start, end: start + frames, buffer };
+    graphDecodeCost = performance.now() - begin;
+    graph.stats.decodeMs = graphDecodeCost; graph.stats.decodes++;
+    const chunk = { key: target.key, blob: target.blob, start, end: start + count, buffer };
+    graphChunks = [...graphChunks.filter(c => c.blob !== target.blob), chunk].slice(-2);
     if (!instance.playing && target.key === instance.target.key) instance.cache = [
       ...instance.cache.filter(c => c.key === target.key && c.end > instance.frame && c.start !== start), chunk,
-    ].slice(-2);
+    ].sort((a, b) => a.start - b.start).slice(0, 2);
     return chunk;
   } catch (error) { if (!engine.closed) throw error; return null; }
   finally { if (graphDecoder === engine) graphBusy = false; }
@@ -116,6 +127,7 @@ async function loadFile(file) {
   if (!file) return;
   if (!file.size || file.size > LIMITS.input) { failure(Error('音源は0バイトより大きく、512 MiB以下のファイルを選択してください。')); return; }
   const current = ++session;
+  graphDecodeCost = 0;
   graph.reset();
   encoder?.terminate();
   player.dispose();
@@ -210,7 +222,7 @@ function act(action, pattern) {
   render();
 }
 async function queue() {
-  if (encoding || graphBusy || !source || !player.canEncode) return;
+  if (encoding || !source || !player.canEncode) return;
   const pattern = patterns.find(p => p.state === 'queued');
   if (!pattern) return;
   releaseGraphDecoder();

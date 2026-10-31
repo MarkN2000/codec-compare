@@ -112,5 +112,7 @@ body { margin:0; }
 #codec-compact .cc-graph-legend .cc-graph-reference::before { border-top:2px solid #728394; }
 #codec-compact #graph-plots h3 { margin:8px 0 2px; font-size:12px; font-weight:500; }
 #codec-compact #graph-plots canvas { display:block; width:100%; }
+#codec-compact .cc-graph-time { position:relative; }
+#codec-compact #graph-cursor { position:absolute; top:8px; height:144px; width:1.5px; background:#203951; pointer-events:none; }
 #codec-compact #graph-status { margin:5px 0 0; font-size:11px; color:var(--cc-muted); }
 

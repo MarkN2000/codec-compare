@@ -1,5 +1,6 @@
-export function melAt(position, maxHz) { return 720 * ((maxHz + 700) / 720) ** position - 700; }
-export function melPosition(hz, maxHz) { return Math.log((hz + 700) / 720) / Math.log((maxHz + 700) / 720); }
+import { melAt, melPosition } from './analysis.js';
+import { AnalysisCache } from './analysis-cache.js';
+export { melAt, melPosition };
 const frequencyTicks = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
 function frequencyLabel(hz) { return hz >= 1000 ? `${Number((hz / 1000).toFixed(1))}k` : String(hz); }
 
@@ -9,8 +10,9 @@ export function averageSpectrum(data, seconds) {
   for (let row = 0; row < data.times.length; row++) {
     if (Math.abs(data.times[row] - seconds) < Math.abs(data.times[nearest] - seconds)) nearest = row;
     if (Math.abs(data.times[row] - seconds) > .25) continue;
-    count++;
-    for (let bin = 0; bin < data.bins; bin++) result[bin] += data.powers[row * data.bins + bin];
+    const weight = data.weights?.[row] || 1;
+    count += weight;
+    for (let bin = 0; bin < data.bins; bin++) result[bin] += data.powers[row * data.bins + bin] * weight;
   }
   for (let bin = 0; bin < data.bins; bin++) result[bin] = 10 * Math.log10(Math.max(1e-12,
     count ? result[bin] / count : data.powers[nearest * data.bins + bin]));
@@ -67,9 +69,12 @@ export class ComparisonGraph {
     this.plots = document.getElementById('graph-plots');
     this.frequencyCanvas = document.getElementById('frequency-canvas');
     this.canvas = document.getElementById('graph-canvas');
+    this.cursor = document.getElementById('graph-cursor');
     this.status = document.getElementById('graph-status');
     this.generation = 0;
     this.blocks = new Map();
+    this.cache = new AnalysisCache();
+    this.stats = { fftMs: 0, drawMs: 0, decodeMs: 0, decodes: 0, analyses: 0, pauses: 0, retries: 0 };
     this.panel.addEventListener('toggle', () => { if (!this.active) this.reset(); this.tick(); });
     document.addEventListener('visibilitychange', () => { if (!this.active) this.reset(); else this.tick(); });
   }
@@ -77,12 +82,11 @@ export class ComparisonGraph {
   cancelAnalysis() {
     this.generation++;
     this.busy = false;
-    this.input = null;
     this.worker?.terminate();
     this.worker = null;
     this.cancel?.();
     this.cancel = null;
-    this.releaseDecoder?.();
+    this.releaseDecoder?.(true);
   }
   reset(keepDisplay = false) {
     this.cancelAnalysis();
@@ -91,29 +95,34 @@ export class ComparisonGraph {
     this.key = '';
     this.drawn = '';
     this.error = '';
-    if (!keepDisplay) { this.display = null; this.source = null; this.plots.hidden = true; }
+    this.retryAt = 0; this.failures = 0; this.warm = 0;
+    this.lastDraw = 0;
+    if (!keepDisplay) { this.display = null; this.heatDisplay = null; this.background = null; this.backgroundKey = ''; this.source = null; this.plots.hidden = true; }
   }
   tick() {
     const player = this.getPlayer();
     if (!this.active) return;
     if (!player.source) { this.reset(); this.status.textContent = '音源を選択すると比較できます。'; return; }
-    // ponytail: 定期監視と固定の2秒／4秒で判定する。急な負荷増大は予測しないため、必要なら復号速度の実測も加味する。
+    const start = Math.floor(Math.max(0, Math.min(player.position, player.source.duration - 1 / player.rate)) / 4) * 4;
+    const blob = player.target.blob || player.source.file || player.source;
+    const key = this.cache.key(blob, player.rate, 0);
+    if (this.source !== player.source || this.key !== key || start < this.wanted || start > this.wanted + 4) {
+      this.reset(this.source === player.source); this.source = player.source; this.key = key;
+    }
+    this.wanted = start;
     if (player.playing && (player.buffering || (player.scheduledEnd !== player.totalFrames && player.ahead < (this.suspended ? 4 : 2)))) {
-      if (!this.suspended) { this.cancelAnalysis(); this.suspended = true; }
+      if (!this.suspended) {
+        this.suspended = true; this.stats.pauses++;
+        this.worker?.postMessage({ paused: true }); this.releaseDecoder?.();
+      }
       const shown = this.display;
       const range = shown ? `${shown.start.toFixed(1)}–${(shown.start + shown.data[0].length / shown.data[0].rate).toFixed(1)} 秒 · ` : '';
       this.status.textContent = `${range}再生を優先してグラフを休止中`;
       return;
     }
-    this.suspended = false;
+    if (this.suspended) { this.worker?.postMessage({ paused: false }); this.suspended = false; }
     try { player.ensureContext(); }
     catch (error) { this.status.textContent = error.message; return; }
-    const start = Math.floor(Math.max(0, Math.min(player.position, player.source.duration - 1 / player.rate)) / 4) * 4;
-    const key = `${player.target.key}:${player.rate}`;
-    if (this.source !== player.source || this.key !== key || start < this.wanted || start > this.wanted + 4) {
-      this.reset(this.source === player.source); this.source = player.source; this.key = key;
-    }
-    this.wanted = start;
     for (const time of this.blocks.keys()) if (time !== start && time !== start + 4) this.blocks.delete(time);
     const label = this.getLabel();
     const current = this.blocks.get(start);
@@ -127,50 +136,68 @@ export class ComparisonGraph {
       this.status.textContent = `${shown.start.toFixed(1)}–${end.toFixed(1)} 秒${shown.reference ? ' · 基準と同じPCM' : ''}${current ? '' : ' · 更新待ち'}${this.error ? ` · ${this.error}` : ''}`;
       const width = Math.round(this.plots.parentElement.clientWidth);
       const signature = `${shown.start}:${shown.position.toFixed(2)}:${width}:${shown.label}:${Boolean(current)}`;
-      if (this.drawn !== signature) {
+      const now = performance.now();
+      if (this.drawn !== signature && (this.lastDraw === 0 || now - this.lastDraw >= 250 || !player.playing)) {
         this.drawn = signature;
         this.plots.hidden = false;
+        const begin = performance.now();
         this.draw(width, shown.position, shown.label);
+        this.stats.drawMs = performance.now() - begin;
+        this.lastDraw = now;
       }
+      this.drawPosition?.(shown.position);
     } else {
       this.status.textContent = this.error || 'グラフを準備中（圧縮・再生の準備を優先）…';
     }
-    const next = current ? start + 4 : start;
-    if (!this.busy && !this.error && (!current || player.playing) && next < player.source.duration && !this.blocks.has(next)) this.prepare(player, next, label);
+    const next = !current ? start : !this.blocks.has(start + 4) ? start + 4 : player.playing ? -1 : Math.max(start + 8, this.warm);
+    if (!this.busy && performance.now() >= this.retryAt && next >= 0 && next < player.source.duration) this.prepare(player, next, label);
   }
   async prepare(player, seconds, label) {
     this.busy = true;
     const generation = this.generation, target = player.target;
-    const valid = () => generation === this.generation && this.active && this.getPlayer() === player &&
-      (seconds === this.wanted || seconds === this.wanted + 4);
+    const valid = () => generation === this.generation && this.active && this.getPlayer() === player;
     const start = Math.round(seconds * player.rate), frames = Math.min(player.totalFrames - start, player.rate * 4);
-    if (this.input?.seconds !== seconds) this.input = { seconds, channels: [] };
-    const input = this.input;
-    const reference = { key: 'reference', reference: true, channels: player.source.channels, blob: player.source.file };
+    const reference = { key: 'reference', reference: true, channels: player.source.channels, blob: player.source.file || player.source };
     const targets = target.reference ? [reference] : [target, reference];
     try {
+      const results = [];
       for (let i = 0; i < targets.length; i++) {
-        if (input.channels[i]) continue;
+        const key = this.cache.key(targets[i].blob || targets[i], player.rate, seconds);
+        const cached = await this.cache.get(key);
+        if (!valid()) return;
+        if (cached) { results.push(cached); continue; }
+        if (this.suspended) return;
         const chunk = await this.readChunk(player, targets[i], start, frames);
         if (!valid() || !chunk) return;
-        // 再生バッファは転送しない。分析区間だけをコピーしてWorkerに渡す。
-        input.channels[i] = Array.from({ length: chunk.buffer.numberOfChannels }, (_, ch) =>
+        const channels = Array.from({ length: chunk.buffer.numberOfChannels }, (_, ch) =>
           chunk.buffer.getChannelData(ch).slice(start - chunk.start, start - chunk.start + frames));
+        this.worker ||= new Worker(new URL('./analysis.js', import.meta.url), { type: 'module' });
+        const result = await new Promise((resolve, reject) => {
+          this.cancel = () => resolve(null);
+          this.worker.onmessage = ({ data }) => {
+            if (data.error) reject(Error(data.error));
+            else { this.stats.fftMs = data.elapsedMs || 0; this.stats.analyses++; resolve(data.results[0]); }
+          };
+          this.worker.onerror = () => reject(Error('分析に失敗しました。再試行します。'));
+          this.worker.postMessage({ channels: [channels], rate: player.rate }, channels.map(c => c.buffer));
+          if (this.suspended) this.worker.postMessage({ paused: true });
+        });
+        if (!valid() || !result) return;
+        this.cancel = null;
+        await this.cache.put(key, result);
+        if (!valid()) return;
+        results.push(result);
       }
-      this.worker ||= new Worker(new URL('./analysis.js', import.meta.url), { type: 'module' });
-      const results = await new Promise((resolve, reject) => {
-        this.cancel = () => resolve(null);
-        this.worker.onmessage = ({ data }) => data.error ? reject(Error(data.error)) : resolve(data.results);
-        this.worker.onerror = () => reject(Error('グラフの分析に失敗しました。閉じてから開き直してください。'));
-        this.worker.postMessage({ channels: input.channels, rate: player.rate }, input.channels.flat().map(c => c.buffer));
-        this.input = null;
-      });
-      if (!valid() || !results) return;
-      this.blocks.set(seconds, { start: seconds, label, reference: target.reference, position: 0,
+      if (seconds === this.wanted || seconds === this.wanted + 4) this.blocks.set(seconds, { start: seconds, label, reference: target.reference, position: 0,
         data: results.length === 1 ? [results[0], results[0]] : [results[1], results[0]] });
-      this.cancel = null;
+      this.warm = Math.max(this.warm, seconds + 4);
+      this.error = ''; this.failures = 0; this.retryAt = 0;
     } catch (error) {
-      if (valid()) { this.error = `グラフ：${error.message}`; this.input = null; this.worker?.terminate(); this.worker = null; }
+      if (valid()) {
+        this.error = `グラフ：${error.message}（再試行待ち）`;
+        this.retryAt = performance.now() + Math.min(30, 2 ** ++this.failures) * 1000;
+        this.stats.retries++; this.worker?.terminate(); this.worker = null;
+      }
     } finally { if (generation === this.generation) this.busy = false; }
   }
   draw(width, position, label) {
@@ -184,11 +211,15 @@ export class ComparisonGraph {
       }
       canvas.style.height = `${height}px`;
       canvas.setAttribute('aria-label', `${spectrum ? '周波数スペクトル' : '時間×周波数の差分'}。基準PCMと${label}、${this.status.textContent}。${spectrum ? '共通の尺度で表示。' : '約0.1秒×64帯域の差分。青は減少、白は変化なし、赤は増加。'}`);
+      if (!spectrum && this.heatDisplay === this.display && this.heatWidth === pixelWidth) continue;
+      if (!spectrum) { this.heatDisplay = this.display; this.heatWidth = pixelWidth; }
       const ctx = canvas.getContext('2d'); ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
       ctx.font = '11px sans-serif'; ctx.lineWidth = 1; ctx.textAlign = 'left';
       const left = 40, right = width - 12, plotWidth = right - left, maxHz = data[0].rate / 2;
       if (spectrum) {
         const top = 16, bottom = height - 27, plotHeight = bottom - top;
+        const backgroundKey = `${pixelWidth}:${ratio}:${maxHz}`;
+        if (this.backgroundKey !== backgroundKey) {
         ctx.fillStyle = '#5c7288'; ctx.fillText('dBFS', 0, 10);
         for (let db = 0; db >= -120; db -= 30) {
           const y = top - db / 120 * plotHeight;
@@ -205,6 +236,12 @@ export class ComparisonGraph {
           ctx.textAlign = edge ? 'right' : 'center'; ctx.fillText(text, x, height - 6);
           lastLabel = edge ? x : x + ctx.measureText(text).width / 2;
         }
+        this.background = document.createElement('canvas');
+        this.background.width = canvas.width; this.background.height = canvas.height;
+        this.background.getContext('2d').drawImage(canvas, 0, 0);
+        this.backgroundKey = backgroundKey;
+        this.binPositions = Float32Array.from({ length: data[0].bins }, (_, bin) => melPosition(bin * maxHz / (data[0].bins - 1), maxHz) * plotWidth);
+        } else ctx.drawImage(this.background, 0, 0, width, height);
         ctx.textAlign = 'left';
         for (let line = 0; line < 2; line++) {
           const values = averageSpectrum(data[line], position);
@@ -215,7 +252,7 @@ export class ComparisonGraph {
           ctx.moveTo(left, top + Math.min(120, Math.max(0, -firstDb)) / 120 * plotHeight);
           // FFTの全ビンを描く。座標だけをメル尺度にし、ピークや分析値を間引かない。
           for (let bin = Math.ceil(first); bin < values.length; bin++) {
-            const x = melPosition(bin * step, maxHz) * plotWidth, db = values[bin];
+            const x = this.binPositions[bin], db = values[bin];
             const y = top + Math.min(120, Math.max(0, -db)) / 120 * plotHeight;
             ctx.lineTo(left + x, y);
           }
@@ -239,9 +276,6 @@ export class ComparisonGraph {
           ctx.textAlign = n === 2 ? 'right' : n === 0 ? 'left' : 'center';
           ctx.fillText(`${(start + duration * n / 2).toFixed(1)} s`, left + plotWidth * n / 2, top + h + 15);
         }
-        ctx.textAlign = 'left'; ctx.strokeStyle = '#203951'; ctx.lineWidth = 1.5;
-        const x = left + timePosition(position, duration) * plotWidth;
-        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + h); ctx.stroke();
         const gradient = ctx.createLinearGradient(left, 0, right, 0);
         for (let i = 0; i <= 4; i++) gradient.addColorStop(i / 4, `rgb(${differenceColor(i * 12 - 24).join(',')})`);
         ctx.fillStyle = gradient; ctx.fillRect(left, 184, plotWidth, 6);
@@ -250,11 +284,24 @@ export class ComparisonGraph {
         ctx.textAlign = 'right'; ctx.fillText('+24 dB 増加', right, 207);
       }
     }
+    this.plotWidth = width;
+    this.drawPosition(position);
+  }
+  drawPosition(position) {
+    if (this.cursor && this.display && this.plotWidth) this.cursor.style.left = `${40 + timePosition(position, this.display.data[0].length / this.display.data[0].rate) * (this.plotWidth - 52)}px`;
   }
   heatmap([reference, selected], width = Math.max(1, Math.ceil(reference.length / reference.rate * 10))) {
     const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = 64;
     const ctx = canvas.getContext('2d'), image = ctx.createImageData(canvas.width, canvas.height);
     const columns = fftColumns(reference, width);
+    if (reference.bands && selected.bands) {
+      for (let y = 0; y < 64; y++) for (let x = 0; x < width; x++) {
+        const index = columns[x] * 64 + 63 - y;
+        const color = differenceColor(bandDifference(reference.bands[index], selected.bands[index]));
+        image.data.set([...color, 255], (y * width + x) * 4);
+      }
+      ctx.putImageData(image, 0, 0); return canvas;
+    }
     for (let y = 0; y < canvas.height; y++) {
       const maxHz = reference.rate / 2, step = maxHz / (reference.bins - 1);
       const a = Math.min(reference.bins - 1, Math.max(1, Math.round(melAt(1 - (y + 1) / canvas.height, maxHz) / step)));

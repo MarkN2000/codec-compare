@@ -44,9 +44,11 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   assert.equal(context.patterns[0].blob, undefined);
   assert.equal(context.patterns[0].progress, undefined);
   await context.queue(); assert.equal(engines.length, 1, '解析中は変換を始めない');
+  context.graphBusy = true;
   engines[0].done.resolve(first); await loading;
   assert.equal(engines[0].closed, true);
   assert.equal(engines[1].source, first, '解析後すぐに新音源を変換');
+  assert.equal(context.encoding, true, 'グラフの追加復号より変換を優先する');
   engines[1].done.reject(Error('出力上限')); await settle();
   assert.equal(context.patterns[0].state, 'error');
   const next = context.queue(); engines[2].done.resolve({ size: 20 }); await next;
