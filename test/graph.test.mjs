@@ -201,31 +201,44 @@ test('2つのグラフは同じFFT結果と位置を描き、差分画像を再�
     const context = { labels: [], images: [],
       setTransform() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fillRect() {}, putImageData() {},
       fillText(text) { this.labels.push(text); }, measureText: text => ({ width: text.length * 6 }),
-      drawImage(image) { this.images.push(image); }, createLinearGradient: () => ({ addColorStop() {} }),
+      drawImage(image) { this.images.push(image); this.painted = true; }, createLinearGradient: () => ({ addColorStop() {} }),
       createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
     };
+    let width = 300, height = 150;
     return { style: {}, attributes: {}, context, getContext: () => context,
+      get width() { return width; }, set width(value) { width = Math.trunc(value); context.painted = false; },
+      get height() { return height; }, set height(value) { height = Math.trunc(value); context.painted = false; },
       setAttribute(name, value) { this.attributes[name] = value; } };
   };
   globalThis.document = { createElement() { images++; return canvas(); } };
   globalThis.window = { devicePixelRatio: 1 };
   try {
     const data = compactFrames(spectrumFrames([new Float32Array(48000 * 4)], 48000));
-    const graph = Object.create(ComparisonGraph.prototype);
-    graph.frequencyCanvas = canvas(); graph.canvas = canvas();
-    graph.status = { textContent: '4.0–8.0 秒' };
-    graph.display = { start: 4, data: [data, data] };
-    graph.draw(500, 1, 'Opus');
-    const image = graph.display.image;
-    graph.draw(500, 2, 'Opus');
-    assert.match(graph.frequencyCanvas.attributes['aria-label'], /周波数スペクトル.*4.0–8.0 秒/);
-    assert.match(graph.canvas.attributes['aria-label'], /時間×周波数の差分.*4.0–8.0 秒/);
-    assert.equal(images, 2, '軸の背景と差分画像をそれぞれ1回だけ作る');
-    assert.deepEqual(graph.canvas.context.images, [image], '位置の線を動かすために差分画像を再描画しない');
-    assert.equal(graph.frequencyCanvas.width, 500);
-    assert.equal(graph.canvas.width, 500);
-    assert.ok(graph.canvas.context.labels.includes('4.0 s'));
-    assert.ok(graph.canvas.context.labels.includes('8.0 s'));
+    for (const ratio of [1, 1.25, 1.5, 1.75, 2]) {
+      images = 0; globalThis.window.devicePixelRatio = ratio;
+      const graph = Object.create(ComparisonGraph.prototype);
+      graph.frequencyCanvas = canvas(); graph.canvas = canvas();
+      graph.status = { textContent: '4.0–8.0 秒' };
+      graph.display = { start: 4, data: [data, data] };
+      graph.draw(500, 1, 'Opus');
+      const image = graph.display.image;
+      graph.draw(500, 2, 'Opus');
+      assert.equal(graph.canvas.context.painted, true, `表示倍率${ratio}で2回目の描画後も差分画像が残る`);
+      assert.match(graph.frequencyCanvas.attributes['aria-label'], /周波数スペクトル.*4.0–8.0 秒/);
+      assert.match(graph.canvas.attributes['aria-label'], /時間×周波数の差分.*4.0–8.0 秒/);
+      assert.equal(images, 2, '軸の背景と差分画像をそれぞれ1回だけ作る');
+      assert.deepEqual(graph.canvas.context.images, [image], '位置の線を動かすために差分画像を再描画しない');
+      assert.equal(graph.frequencyCanvas.width, Math.round(500 * ratio));
+      assert.equal(graph.canvas.width, Math.round(500 * ratio));
+      assert.equal(graph.canvas.height, Math.round(210 * ratio));
+      assert.ok(graph.canvas.context.labels.includes('4.0 s'));
+      assert.ok(graph.canvas.context.labels.includes('8.0 s'));
+      const nextRatio = ratio === 1 ? 1.25 : 1;
+      globalThis.window.devicePixelRatio = nextRatio;
+      graph.draw(500 * ratio / nextRatio, 2, 'Opus');
+      assert.equal(graph.canvas.context.painted, true, '実ピクセル幅が同じでも倍率・高さが変わったら差分画像を描き直す');
+      assert.deepEqual(graph.canvas.context.images, [image, image], '描き直しでも生成済みの差分画像を使う');
+    }
   } finally { globalThis.document = previousDocument; globalThis.window = previousWindow; }
 });
 

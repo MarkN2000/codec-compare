@@ -203,14 +203,15 @@ export class ComparisonGraph {
     const height = 210;
     const { data, start } = this.display;
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const pixelWidth = Math.max(1, Math.round(width * ratio));
+    const pixelWidth = Math.max(1, Math.round(width * ratio)), pixelHeight = Math.round(height * ratio);
     for (const [spectrum, canvas] of [[true, this.frequencyCanvas], [false, this.canvas]]) {
-      if (canvas.width !== pixelWidth || canvas.height !== height * ratio) {
-        canvas.width = pixelWidth; canvas.height = height * ratio;
+      const resized = canvas.width !== pixelWidth || canvas.height !== pixelHeight;
+      if (resized) {
+        canvas.width = pixelWidth; canvas.height = pixelHeight;
       }
       canvas.style.height = `${height}px`;
       canvas.setAttribute('aria-label', `${spectrum ? '周波数スペクトル' : '時間×周波数の差分'}。基準PCMと${label}、${this.status.textContent}。${spectrum ? '共通の尺度で表示。' : '約0.1秒×64帯域の差分。青は減少、白は変化なし、赤は増加。'}`);
-      if (!spectrum && this.heatDisplay === this.display && this.heatWidth === pixelWidth) continue;
+      if (!spectrum && !resized && this.heatDisplay === this.display && this.heatWidth === pixelWidth) continue;
       if (!spectrum) { this.heatDisplay = this.display; this.heatWidth = pixelWidth; }
       const ctx = canvas.getContext('2d'); ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
       ctx.font = '11px sans-serif'; ctx.lineWidth = 1; ctx.textAlign = 'left';
