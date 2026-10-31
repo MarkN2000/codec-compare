@@ -8,7 +8,7 @@ import { defaults, encodeArgs } from '../model.js';
 const source = { rate: 48000, channels: 2, frames: 48000 * 60, duration: 60 };
 const pattern = (id, codec, changes = {}) => ({ id, state: 'ready', blob: { size: 960000 }, config: { ...defaults(codec, source), ...changes } });
 
-test('聴き当ては完成済みだけを使い、同じ設定・可逆PCM条件を重複出題しない', () => {
+test('聴き分けクイズは完成済みだけを使い、同じ設定・可逆PCM条件を重複出題しない', () => {
   const patterns = [pattern('opus', 'opus'), pattern('same', 'opus'), pattern('low', 'opus', { bitrate: 48 }),
     pattern('cbr', 'opus', { mode: 'CBR' }), pattern('cut', 'opus', { cutoff: 12000 }),
     pattern('wav24', 'wav'), pattern('flac24', 'flac'), pattern('flac24-high', 'flac', { level: 12 }),
@@ -47,7 +47,7 @@ test('準備・バッファ待ち・切り替え中は説明行を表示せず�
   assert.equal(node('#game-retry').hidden, false, 'エラー時の再試行は残す');
 });
 
-test('聴き当ての準備・採点・再試行・終了は既存Playerを使い、遅い結果を持ち越さない', async () => {
+test('聴き分けクイズの準備・採点・再試行・終了は既存Playerを使い、遅い結果を持ち越さない', async () => {
   const previousDocument = globalThis.document, nodes = new Map(), classes = new Set();
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { innerHTML: '', listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, focus() {},
