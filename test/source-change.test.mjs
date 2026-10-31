@@ -7,7 +7,7 @@ import { LIMITS, defaults } from '../model.js';
 test('音源変更で設定だけを保持し、解析後の自動変換・失敗・連続変更を扱う', async () => {
   // 実際の読み込み・キュー関数を使い、DOMと重い音声処理だけを置き換える。
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
-  const elements = new Map(), engines = [], errors = [];
+  const elements = new Map(), engines = [], errors = [], releases = [];
   const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
   const config = { ...defaults('opus', { rate: 44100, channels: 2 }), bitrate: 192, cutoff: 12000 };
   const player = () => ({ canEncode: true, dispose() {}, setSource(source) { this.source = source; } });
@@ -18,7 +18,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
     player: player(), makePlayer: player, graph: { reset() {} }, encoder: null, editing: {}, draft: {},
     $: id => { if (!elements.has(id)) elements.set(id, { replaceChildren() {}, append() {}, querySelectorAll: () => [] }); return elements.get(id); },
     document: { createElement: () => ({}) }, render() {}, message() {}, failure: error => errors.push(error.message),
-    sizeLabel: size => String(size), timeLabel: seconds => String(seconds), releaseGraphDecoder() {},
+    sizeLabel: size => String(size), timeLabel: seconds => String(seconds), releaseGraphDecoder: clear => releases.push(clear),
     Engine: class {
       constructor() { engines.push(this); this.done = deferred(); }
       analyze(file) { this.file = file; return this.done.promise; }
@@ -49,6 +49,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   assert.equal(engines[0].closed, true);
   assert.equal(engines[1].source, first, '解析後すぐに新音源を変換');
   assert.equal(context.encoding, true, 'グラフの追加復号より変換を優先する');
+  assert.equal(releases.at(-1), true, '変換用Workerを作る前に、待機中のグラフWorkerも解放する');
   engines[1].done.reject(Error('出力上限')); await settle();
   assert.equal(context.patterns[0].state, 'error');
   const next = context.queue(); engines[2].done.resolve({ size: 20 }); await next;

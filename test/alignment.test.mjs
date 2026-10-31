@@ -90,7 +90,10 @@ test('44.1/48 kHzの実WASM復号で周波数・位置・FFT窓を照合する',
           const controlFft = spectrumFrames(control, rate);
           let maxPcmError = 0, maxDbError = 0;
           for (let ch = 0; ch < 2; ch++) for (let i = 0; i < frames; i++) maxPcmError = Math.max(maxPcmError, Math.abs(a[ch][i] - control[ch][i]));
-          for (const bin of [4, 40, 85, 200, 800]) for (const db of frameBandDifferences(fftA, controlFft, bin, bin + 1)) maxDbError = Math.max(maxDbError, Math.abs(db));
+          for (const hz of [50, 500, 1000, 5000, 10000]) {
+            const bin = Math.round(hz * FFT_SIZE / rate);
+            for (const db of frameBandDifferences(fftA, controlFft, bin, bin + 1)) maxDbError = Math.max(maxDbError, Math.abs(db));
+          }
           assert.ok(maxPcmError < 2e-7, '圧縮なしの48 kHz対照とサンプル単位で一致');
           assert.ok(maxDbError < .01, `可逆対照の差分グラフが0 dBに戻る: ${maxDbError}`);
         }

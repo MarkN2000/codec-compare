@@ -18,7 +18,7 @@ test('周波数とdBFSを校正し、逆位相ステレオ・無音・短い音�
   // FFTとは別の直接DFTで、ビンに一致しない音の周辺と漏れ成分も照合する。
   const offBin = Float32Array.from({ length: FFT_SIZE }, (_, i) => .3 * Math.sin(2 * Math.PI * 440 * i / rate));
   const measured = spectrumFrames([offBin], rate);
-  for (const k of [1, 17, 18, 19, 20, 60]) {
+  for (const k of [1, 8, 9, 10, 20, 60]) {
     let real = 0, imaginary = 0, weight = 0;
     for (let i = 0; i < FFT_SIZE; i++) {
       const w = .5 - .5 * Math.cos(2 * Math.PI * i / (FFT_SIZE - 1));
@@ -308,7 +308,7 @@ test('先読み・FFT休止再開・基準共有・停止中の先行生成・�
     worker.finish(); await settle(); graph.tick(); await settle();
     assert.ok(graph.cache.stats.memoryHits > 0, '基準PCMの分析を再利用する');
     assert.equal(graph.display.label, 'opus');
-    assert.equal(graph.display.data[0].bins, 1025);
+    assert.equal(graph.display.data[0].bins, 513);
     auto = true; worker.finish(); await settle();
     player.playing = false;
     for (let i = 0; i < 8; i++) { graph.tick(); await settle(); }

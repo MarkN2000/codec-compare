@@ -19,7 +19,7 @@ export class AnalysisCache {
   }
   key(blob, rate, seconds) {
     if (!this.ids.has(blob)) this.ids.set(blob, ++this.nextId);
-    return `${this.prefix}:2048-v1:${this.ids.get(blob)}:${rate}:${seconds}`;
+    return `${this.prefix}:1024-v2:${this.ids.get(blob)}:${rate}:${seconds}`;
   }
   async open() {
     try {

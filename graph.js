@@ -79,17 +79,17 @@ export class ComparisonGraph {
     document.addEventListener('visibilitychange', () => { if (!this.active) this.reset(); else this.tick(); });
   }
   get active() { return this.panel.open && !document.hidden; }
-  cancelAnalysis() {
+  cancelAnalysis(clearDecoder = true) {
     this.generation++;
     this.busy = false;
     this.worker?.terminate();
     this.worker = null;
     this.cancel?.();
     this.cancel = null;
-    this.releaseDecoder?.(true);
+    this.releaseDecoder?.(clearDecoder);
   }
   reset(keepDisplay = false) {
-    this.cancelAnalysis();
+    this.cancelAnalysis(!keepDisplay);
     this.suspended = false;
     this.blocks.clear();
     this.key = '';

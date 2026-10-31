@@ -10,13 +10,13 @@ const actionIcons = {
 let source = null, patterns = [], session = 0, encoding = false, encoder = null, editing = null, draft = null;
 let playback = {}, player = makePlayer();
 let graphDecoder = null, graphBusy = false;
-let graphChunks = [], graphDecodeCost = 0, graphDecodeStart = 0;
+let graphChunks = [], graphDecodeCost = 0;
 const graph = new ComparisonGraph(() => player, () => {
   const pattern = patterns.find(p => p.id === playback.selected);
   return pattern ? `${CODECS[pattern.config.codec].name} · ${description(pattern.config)}` : '基準PCM';
 }, readGraphChunk, releaseGraphDecoder);
 function releaseGraphDecoder(clear = false) {
-  if (graphBusy) graphDecodeCost = Math.max(graphDecodeCost, performance.now() - graphDecodeStart);
+  if (!clear && !graphBusy) return;
   graphDecoder?.terminate(); graphDecoder = null; graphBusy = false;
   if (clear) graphChunks = [];
 }
@@ -28,18 +28,21 @@ async function readGraphChunk(instance, target, start, frames) {
   if (instance.playing && target.key === instance.target.key) return null;
   if (instance !== player || !source || encoder || encoding || graphBusy ||
     patterns.some(p => p.state === 'queued') || instance.requested || !instance.canEncode ||
-    (instance.playing && instance.ahead < Math.max(4, graphDecodeCost / 1000 + 2) && instance.scheduledEnd !== instance.totalFrames)) return null;
+    (instance.playing && instance.ahead < 4 && instance.scheduledEnd !== instance.totalFrames)) return null;
   const engine = graphDecoder ||= new Engine();
   const revision = instance.revision;
   graphBusy = true;
   try {
-    const seconds = instance.playing ? (instance.ahead >= Math.max(10, graphDecodeCost / 1000 * 2 + 2) ? 8 : 4) : 16;
+    // ponytail: 先頭復号の時間は区間長に比例しない。実測はバッチ選択だけに使い、通常の先読み内で必ず開始できる条件にする。
+    const batchAhead = Math.min(7, Math.max(6, graphDecodeCost / 1000 * 2 + 2));
+    const seconds = instance.playing ? (instance.ahead >= batchAhead ? 8 : 4) : 16;
     const count = Math.min(instance.totalFrames - start, Math.max(frames, instance.rate * seconds));
-    const begin = graphDecodeStart = performance.now();
+    const begin = performance.now();
     const buffer = await engine.decode(instance.source, target, start, count, instance.context);
     if (engine !== graphDecoder || instance !== player || revision !== instance.revision) return null;
-    graphDecodeCost = performance.now() - begin;
-    graph.stats.decodeMs = graphDecodeCost; graph.stats.decodes++;
+    const elapsed = performance.now() - begin;
+    graphDecodeCost = elapsed * Math.min(1, instance.rate * 4 / count);
+    graph.stats.decodeMs = elapsed; graph.stats.decodes++;
     const chunk = { key: target.key, blob: target.blob, start, end: start + count, buffer };
     graphChunks = [...graphChunks.filter(c => c.blob !== target.blob), chunk].slice(-2);
     if (!instance.playing && target.key === instance.target.key) instance.cache = [
@@ -225,7 +228,7 @@ async function queue() {
   if (encoding || !source || !player.canEncode) return;
   const pattern = patterns.find(p => p.state === 'queued');
   if (!pattern) return;
-  releaseGraphDecoder();
+  releaseGraphDecoder(true);
   encoding = true;
   const current = session, config = pattern.config, engine = encoder = new Engine();
   pattern.state = 'encoding';

@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { CODECS, LIMITS, defaults, encodeArgs, commonFilter, chunkArgs, samePreview, metrics, validateConfig } from '../model.js';
 import { Player } from '../audio.js';
-import { spectrumFrames } from '../analysis.js';
+import { spectrumFrames, FFT_SIZE } from '../analysis.js';
 
 test('基準PCM・設定・サイズ計算', () => {
   const source = { rate: 44100, channels: 2, frames: 441000, duration: 10 };
@@ -135,7 +135,7 @@ test('配布するWASMで対応形式を生成し、区間復号と24 bit一致�
   const before = spectrum(reference48), after = spectrum(opus192);
   for (const [lo, hi] of [[20, 1000], [1000, 10000]]) {
     let p = 0, q = 0;
-    for (let row = 0; row < before.times.length; row++) for (let bin = Math.ceil(lo * 4096 / 48000); bin < hi * 4096 / 48000; bin++) {
+    for (let row = 0; row < before.times.length; row++) for (let bin = Math.ceil(lo * FFT_SIZE / 48000); bin < hi * FFT_SIZE / 48000; bin++) {
       p += before.powers[row * before.bins + bin]; q += after.powers[row * after.bins + bin];
     }
     assert.ok(Math.abs(10 * Math.log10(q / p)) < .5, `192 kbpsで${lo}–${hi} Hzの強さが不自然に増減しない`);

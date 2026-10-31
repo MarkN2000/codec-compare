@@ -1,12 +1,13 @@
 // 4秒分だけを扱う分析Worker。左右は波形を足さず、パワーを平均する。
-export const FFT_SIZE = 2048;
+export const FFT_SIZE = 1024;
+// ponytail: 実行回数を増やさない代わりに窓の間の瞬間的な変化を見落とす。全時間を覆う必要が出たらHOPを1024以下にする。
 const HOP = 2048, HALF = FFT_SIZE / 2, BINS = HALF + 1;
 export function melAt(position, maxHz) { return 720 * ((maxHz + 700) / 720) ** position - 700; }
 export function melPosition(hz, maxHz) { return Math.log((hz + 700) / 720) / Math.log((maxHz + 700) / 720); }
 const window = Float64Array.from({ length: FFT_SIZE }, (_, i) => .5 - .5 * Math.cos(2 * Math.PI * i / (FFT_SIZE - 1)));
 const reverse = Uint16Array.from({ length: FFT_SIZE }, (_, i) => {
   let value = 0;
-  for (let bit = 0; bit < 11; bit++) { value = value * 2 + (i & 1); i >>= 1; }
+  for (let bit = 0; bit < 10; bit++) { value = value * 2 + (i & 1); i >>= 1; }
   return value;
 });
 const cos = Float64Array.from({ length: HALF }, (_, i) => Math.cos(2 * Math.PI * i / FFT_SIZE));
