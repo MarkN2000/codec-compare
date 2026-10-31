@@ -12,7 +12,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   const config = { ...defaults('opus', { rate: 44100, channels: 2 }), bitrate: 192, cutoff: 12000 };
   const player = () => ({ canEncode: true, dispose() {}, setSource(source) { this.source = source; } });
   const context = vm.createContext({
-    LIMITS, source: { file: { size: 10 } }, session: 0, encoding: true, graphBusy: false,
+    LIMITS, game: null, source: { file: { size: 10 } }, session: 0, encoding: true, graphBusy: false,
     patterns: [{ id: 'a', config, state: 'encoding', blob: { size: 99 }, progress: 50, error: '古いエラー' },
       { id: 'b', config: { ...defaults('g711', { rate: 44100, channels: 2 }), law: 'alaw' }, state: 'ready', blob: { size: 88 } }],
     player: player(), makePlayer: player, graph: { reset() {} }, encoder: null, editing: {}, draft: {},
@@ -32,7 +32,10 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   const settle = () => new Promise(setImmediate);
   const source = name => ({ file: { name, size: 10 }, rate: 48000, channels: 1, originalChannels: 1, frames: 48000, duration: 1 });
   const first = source('新しい音源.wav');
+  let closedGames = 0;
+  context.game = { active: true, close() { if (this.active) { this.active = false; closedGames++; } } };
   const loading = context.loadFile(first.file);
+  assert.equal(closedGames, 1, '音源変更では先にゲームを終了する');
   assert.equal(context.source, null);
   assert.equal(context.patterns.length, 2);
   assert.equal(context.patterns[0].config.bitrate, 192);
@@ -52,6 +55,9 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   assert.equal(releases.at(-1), true, '変換用Workerを作る前に、待機中のグラフWorkerも解放する');
   engines[1].done.reject(Error('出力上限')); await settle();
   assert.equal(context.patterns[0].state, 'error');
+  context.game.active = true;
+  await context.queue(); assert.equal(engines.length, 2, 'ゲーム中は次の圧縮用Workerを起動しない');
+  context.game.active = false;
   const next = context.queue(); engines[2].done.resolve({ size: 20 }); await next;
   assert.equal(context.patterns[1].state, 'ready', '1行の失敗で他の変換を止めない');
   const broken = context.loadFile({ name: '壊れた音源', size: 10 });

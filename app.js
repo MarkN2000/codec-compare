@@ -2,6 +2,7 @@ import { CODECS, LIMITS, defaults, ratesFor, bitratesFor, cutoffsFor, validateCo
 import { Engine, Player } from './audio.js';
 import { clearPCM } from './pcm-cache.js';
 import { ComparisonGraph } from './graph.js';
+import { ListeningGame, gameCandidates } from './game.js';
 
 const $ = id => document.getElementById(id);
 const actionIcons = {
@@ -9,13 +10,17 @@ const actionIcons = {
   download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M5 16.25a.75.75 0 0 1 .75.75v2c0 .138.112.25.25.25h12a.25.25 0 0 0 .25-.25v-2a.75.75 0 0 1 1.5 0v2A1.75 1.75 0 0 1 18 20.75H6A1.75 1.75 0 0 1 4.25 19v-2a.75.75 0 0 1 .75-.75" clip-rule="evenodd"/><path fill="currentColor" d="M10.738 3.75a.99.99 0 0 0-.988.906a37 37 0 0 0-.082 5.27q-.37.02-.74.047l-1.49.109a.76.76 0 0 0-.585 1.167a15.6 15.6 0 0 0 4.032 4.258l.597.429a.89.89 0 0 0 1.036 0l.597-.429a15.6 15.6 0 0 0 4.032-4.258a.76.76 0 0 0-.585-1.167l-1.49-.109a42 42 0 0 0-.74-.047a37 37 0 0 0-.081-5.27a.99.99 0 0 0-.989-.906z"/></svg>',
 };
 let source = null, patterns = [], session = 0, encoding = false, encoder = null, editing = null, draft = null;
-let playback = {}, player = makePlayer();
+let game = null, playback = {}, player = makePlayer();
 let graphDecoder = null, graphBusy = false;
 let graphChunks = [], graphDecodeCost = 0;
 const graph = new ComparisonGraph(() => player, () => {
   const pattern = patterns.find(p => p.id === playback.selected);
   return pattern ? `${CODECS[pattern.config.codec].name} · ${description(pattern.config)}` : '基準PCM';
 }, readGraphChunk, releaseGraphDecoder);
+let gameGraphOpen = false;
+game = new ListeningGame(() => player, () => patterns, () => {
+  gameGraphOpen = $('graph').open; $('graph').open = false; graph.reset(); $('editor').hidden = true;
+}, () => { $('graph').open = gameGraphOpen; render(); });
 function releaseGraphDecoder(clear = false) {
   if (!clear && !graphBusy) return;
   graphDecoder?.terminate(); graphDecoder = null; graphBusy = false;
@@ -67,7 +72,7 @@ function makePlayer() {
     $('play').setAttribute('aria-label', state.playing ? '一時停止' : '再生');
     $('play').setAttribute('aria-busy', String(state.buffering));
     render();
-  }, failure);
+  }, error => { if (game?.active) game.fail(); else failure(error); });
   instance.readPrepared = preparedGraphChunk;
   instance.loop = $('loop').getAttribute('aria-pressed') === 'true';
   return instance;
@@ -81,6 +86,8 @@ function status(pattern) {
   return '';
 }
 function render() {
+  if (game?.active) return;
+  $('game-open').disabled = !source || gameCandidates(patterns).length < 2;
   if (!source) return;
   const focused = document.activeElement?.dataset.focus;
   $('patterns').replaceChildren();
@@ -136,6 +143,7 @@ function render() {
 async function loadFile(file) {
   if (!file) return;
   if (!file.size || file.size > LIMITS.input) { failure(Error('音源は0バイトより大きく、512 MiB以下のファイルを選択してください。')); return; }
+  game?.close();
   const current = ++session;
   graphDecodeCost = 0;
   graph.reset();
@@ -150,6 +158,7 @@ async function loadFile(file) {
   editing = draft = null;
   $('patterns').replaceChildren();
   for (const id of ['play', 'seek', 'add']) $(id).disabled = true;
+  $('game-open').disabled = true;
   $('filename').textContent = file.name;
   $('filename').title = file.name;
   $('source-info').textContent = '音源を解析中…';
@@ -243,7 +252,7 @@ function act(action, pattern) {
   render();
 }
 async function queue() {
-  if (encoding || !source || !player.canEncode) return;
+  if (encoding || !source || !player.canEncode || game?.active) return;
   const pattern = patterns.find(p => p.state === 'queued');
   if (!pattern) return;
   releaseGraphDecoder(true);
@@ -313,8 +322,9 @@ document.addEventListener('drop', event => {
   else loadFile(event.dataTransfer.files[0]);
 });
 setInterval(() => {
+  if (game?.active) { game.tick(); return; }
   if (!seeking) { $('position').textContent = timeLabel(player.position); $('seek').value = player.position; }
   queue();
   graph.tick();
 }, 150);
-window.addEventListener('pagehide', event => { graph.reset(); if (!event.persisted) { encoder?.terminate(); player.dispose(); clearPCM(); } else player.pause(); });
+window.addEventListener('pagehide', event => { game?.close(); graph.reset(); if (!event.persisted) { encoder?.terminate(); player.dispose(); clearPCM(); } else player.pause(); });
