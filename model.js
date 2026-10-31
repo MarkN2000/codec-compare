@@ -49,9 +49,9 @@ export function validateConfig(c, source) {
   if (codec.levels && !codec.levels.includes(c.level)) throw Error('圧縮レベルを選択してください。');
   if ((c.cutoff ?? 0) !== 0 && !cutoffsFor(c).includes(c.cutoff)) throw Error('この形式・サンプルレートで選べるカットオフを指定してください。');
 }
-export function commonFilter(source) {
+export function commonFilter(source, preparedPCM = false) {
   // ponytail: aeval は毎サンプル評価。高レートで遅い場合は24 bit量子化専用フィルターへ置換する。
-  const exact = source.originalChannels === source.channels && [1, 2].includes(source.channels) &&
+  const exact = preparedPCM || source.originalChannels === source.channels && [1, 2].includes(source.channels) &&
     (!source.layout || source.layout === (source.channels === 1 ? 'mono' : 'stereo')) &&
     (/^pcm_[su](?:8|16(?:le|be)|24(?:le|be))$/.test(source.codec || '') ||
       (source.codec === 'flac' && Number.isInteger(source.bits) && source.bits > 0 && source.bits <= 24));
@@ -63,12 +63,12 @@ export function codecDelay(c) {
   if (c.codec === 'g722') return 22;
   return c.codec === 'sbc' ? 73 : 0;
 }
-export function encodeArgs(source, c, input = '/input/audio', output = `/output.${CODECS[c.codec].ext}`) {
+export function encodeArgs(source, c, input = '/input/audio', output = `/output.${CODECS[c.codec].ext}`, preparedPCM = false) {
   validateConfig(c, source);
   const codec = CODECS[c.codec];
   const delay = codecDelay(c), padding = delay + (c.codec === 'sbc' ? 127 : 0);
-  const filter = commonFilter(source) + (delay && c.codec !== 'lc3' ? `,aresample=${c.rate},apad=pad_len=${padding}` : '');
-  const args = ['-v', 'error', ...(source.codec === 'sbc' ? ['-f', 'sbc'] : []), '-i', input, '-map', '0:a:0', '-vn', '-map_metadata', '-1', '-af', filter, '-ar', String(c.rate), '-ac', String(c.channels), '-c:a', c.codec === 'g711' ? `pcm_${c.law}` : codec.encoder || `pcm_s${c.depth}le`];
+  const filter = (source.hasVideo ? 'asetpts=PTS-STARTPTS,' : '') + commonFilter(source, preparedPCM) + (delay && c.codec !== 'lc3' ? `,aresample=${c.rate},apad=pad_len=${padding}` : '');
+  const args = ['-v', 'error', ...(source.codec === 'sbc' && !preparedPCM ? ['-f', 'sbc'] : []), '-i', input, '-map', '0:a:0', '-vn', '-map_metadata', '-1', '-af', filter, '-ar', String(c.rate), '-ac', String(c.channels), '-c:a', c.codec === 'g711' ? `pcm_${c.law}` : codec.encoder || `pcm_s${c.depth}le`];
   if (c.codec === 'opus') args.push('-b:a', `${c.bitrate}k`, '-vbr', c.mode === 'VBR' ? 'on' : 'off');
   if (c.codec === 'mp3') args.push(...(c.mode === 'VBR' ? ['-q:a', String(c.quality)] : ['-b:a', `${c.bitrate}k`]));
   if (c.codec === 'aac') args.push('-b:a', `${c.bitrate}k`);

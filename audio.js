@@ -75,9 +75,11 @@ export class Engine {
     const frames = Math.ceil(source.duration * config.rate);
     if (config.codec === 'lc3' && (!Number.isSafeInteger(frames) || frames < 1 || frames > 0xffffffff)) throw Error('この音源はLC3のサンプル数上限を超えます。');
     if (config.codec === 'wav' && source.duration * config.rate * config.channels * config.depth / 8 >= LIMITS.output - 65536) throw Error('この設定の出力は512 MiBを超えます。サンプルレートやビット深度を下げてください。');
-    await this.mount(source.file);
+    const pcm = source.hasVideo ? await this.preparePCM(source, { reference: true, blob: source.file, channels: source.channels }) : null;
+    if (this.closed) throw Error('処理を取り消しました。');
+    await this.mount(pcm || source.file);
     try {
-      await this.run(encodeArgs(source, config));
+      await this.run(encodeArgs(source, config, '/input/audio', path, Boolean(pcm)));
       const data = await this.ffmpeg.readFile(path);
       if (data.length >= LIMITS.output - 65536) throw Error('出力上限の512 MiBに達したため、生成を取り消しました。');
       if (config.codec === 'lc3') {
