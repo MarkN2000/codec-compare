@@ -1,5 +1,6 @@
 import { CODECS, LIMITS, defaults, ratesFor, bitratesFor, cutoffsFor, validateConfig, description, metrics, timeLabel, sizeLabel } from './model.js';
 import { Engine, Player } from './audio.js';
+import { clearPCM } from './pcm-cache.js';
 import { ComparisonGraph } from './graph.js';
 
 const $ = id => document.getElementById(id);
@@ -20,12 +21,15 @@ function releaseGraphDecoder(clear = false) {
   graphDecoder?.terminate(); graphDecoder = null; graphBusy = false;
   if (clear) graphChunks = [];
 }
+function preparedGraphChunk(target, start, frames) {
+  return graphChunks.find(c => c.blob === target.blob && c.start <= start && c.end >= start + frames);
+}
 async function readGraphChunk(instance, target, start, frames) {
   const cached = instance.analysisChunk(target, start, frames);
   if (cached) return cached;
-  const prepared = graphChunks.find(c => c.blob === target.blob && c.start <= start && c.end >= start + frames);
+  const prepared = preparedGraphChunk(target, start, frames);
   if (prepared) return prepared;
-  if (instance.playing && target.key === instance.target.key) return null;
+  if (instance.playing && target.key === instance.target.key && (instance.busy || start < instance.scheduledEnd || instance.ahead < 6)) return null;
   if (instance !== player || !source || encoder || encoding || graphBusy ||
     patterns.some(p => p.state === 'queued') || instance.requested || !instance.canEncode ||
     (instance.playing && instance.ahead < 4 && instance.scheduledEnd !== instance.totalFrames)) return null;
@@ -62,6 +66,7 @@ function makePlayer() {
     $('play').setAttribute('aria-busy', String(state.buffering));
     render();
   }, failure);
+  instance.readPrepared = preparedGraphChunk;
   instance.loop = $('loop').getAttribute('aria-pressed') === 'true';
   return instance;
 }
@@ -134,6 +139,7 @@ async function loadFile(file) {
   graph.reset();
   encoder?.terminate();
   player.dispose();
+  clearPCM();
   source = null;
   patterns = patterns.map(({ id, config }) => ({ id, config: { ...config }, state: 'queued' }));
   encoding = false;
@@ -220,6 +226,7 @@ function act(action, pattern) {
   }
   if ([playback.selected, playback.pending].includes(pattern.id)) { player.pause(); player.select(null); }
   if (pattern.state === 'encoding') encoder?.terminate();
+  if (pattern.blob) clearPCM(pattern.blob);
   patterns = patterns.filter(p => p !== pattern);
   if (editing === pattern) closeEditor();
   render();
@@ -244,8 +251,11 @@ async function queue() {
   render();
   try {
     const blob = await engine.encode(source, config);
-    if (current !== session || !patterns.includes(pattern) || pattern.config !== config) return;
-    if (source.file.size + patterns.reduce((n, p) => n + (p.blob?.size || 0), 0) + blob.size > LIMITS.total) throw Error('合計保持量が1 GiBを超えます。不要なパターンを削除してください。');
+    if (current !== session || !patterns.includes(pattern) || pattern.config !== config) { clearPCM(blob); return; }
+    if (source.file.size + patterns.reduce((n, p) => n + (p.blob?.size || 0), 0) + blob.size > LIMITS.total) {
+      clearPCM(blob);
+      throw Error('合計保持量が1 GiBを超えます。不要なパターンを削除してください。');
+    }
     pattern.blob = blob;
     pattern.state = 'ready';
   } catch (error) {
@@ -266,6 +276,7 @@ $('editor').addEventListener('submit', event => {
     if (editing) {
       if ([playback.selected, playback.pending].includes(editing.id)) { player.pause(); player.select(null); }
       if (editing.state === 'encoding') encoder?.terminate();
+      if (editing.blob) clearPCM(editing.blob);
       Object.assign(editing, { config: { ...draft }, state: 'queued', blob: null, error: null, progress: 0 });
     } else patterns.push({ id: crypto.randomUUID(), config: { ...draft }, state: 'queued' });
     closeEditor(); message(); render(); queue();
@@ -297,4 +308,4 @@ setInterval(() => {
   queue();
   graph.tick();
 }, 150);
-window.addEventListener('pagehide', event => { graph.reset(); if (!event.persisted) { encoder?.terminate(); player.dispose(); } else player.pause(); });
+window.addEventListener('pagehide', event => { graph.reset(); if (!event.persisted) { encoder?.terminate(); player.dispose(); clearPCM(); } else player.pause(); });

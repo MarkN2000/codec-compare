@@ -309,11 +309,20 @@ test('先読み・FFT休止再開・基準共有・停止中の先行生成・�
     assert.ok(graph.cache.stats.memoryHits > 0, '基準PCMの分析を再利用する');
     assert.equal(graph.display.label, 'opus');
     assert.equal(graph.display.data[0].bins, 513);
+    const save = graph.cache.put.bind(graph.cache);
+    graph.cache.put = (...args) => { save(...args); return new Promise(() => {}); };
     auto = true; worker.finish(); await settle();
+    for (let i = 0; i < 6; i++) { graph.tick(); await settle(); }
+    assert.ok(graph.blocks.has(12), '再生中も余裕があれば現在を含む16秒まで先行分析する');
+    assert.equal(graph.busy, false, '保存完了を待たずに分析結果を渡す');
+    graph.cache.put = save;
+    player.ahead = 5; graph.tick(); await settle();
+    assert.ok(graph.blocks.size <= 2, '余裕が減ったら先行範囲を縮める');
+    player.ahead = 8;
     player.playing = false;
     for (let i = 0; i < 8; i++) { graph.tick(); await settle(); }
     assert.ok(starts.includes(12) && starts.includes(16), '停止中も先の区間を生成する');
-    assert.ok(graph.blocks.size <= 2, '表示中と次以外は分析キャッシュに任せる');
+    assert.ok(graph.blocks.size <= 4, '現在区間を含む16秒分まで保持する');
     const warmed = decoded;
     player.position = 12; graph.tick(); await settle(); graph.tick(); await settle();
     assert.equal(graph.display.start, 12); assert.equal(decoded, warmed, '先行生成した区間を再復号しない');
@@ -329,4 +338,18 @@ test('先読み・FFT休止再開・基準共有・停止中の先行生成・�
     const stopped = decoded; elements.graph.open = true; document.hidden = true; graph.tick();
     assert.equal(decoded, stopped);
   } finally { globalThis.document = previousDocument; globalThis.Worker = previousWorker; }
+});
+
+test('先行分析で準備済みのPCMを後の再生でも使い、二重復号しない', async () => {
+  const player = new Player(); clearInterval(player.timer);
+  try {
+    player.setSource({ duration: 60, rate: 48000, channels: 2, file: {} });
+    player.context = { sampleRate: 48000, close() {} }; player.chunkSeconds = 4;
+    const prepared = { start: 48000 * 4, end: 48000 * 12, buffer: {} };
+    player.readPrepared = () => prepared;
+    player.engine.decode = () => { throw Error('準備済みの区間を復号し直している'); };
+    const chunk = await player.decode(player.target, 48000 * 4, player.revision);
+    assert.equal(chunk.buffer, prepared.buffer); assert.equal(chunk.start, prepared.start); assert.equal(chunk.end, prepared.end);
+    assert.equal(player.cache[0], chunk);
+  } finally { player.dispose(); }
 });

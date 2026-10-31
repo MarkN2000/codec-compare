@@ -74,7 +74,7 @@ export class ComparisonGraph {
     this.generation = 0;
     this.blocks = new Map();
     this.cache = new AnalysisCache();
-    this.stats = { fftMs: 0, drawMs: 0, decodeMs: 0, decodes: 0, analyses: 0, pauses: 0, retries: 0 };
+    this.stats = { fftMs: 0, fftWallMs: 0, prepareMs: 0, readMs: 0, drawMs: 0, decodeMs: 0, decodes: 0, analyses: 0, pauses: 0, retries: 0 };
     this.panel.addEventListener('toggle', () => { if (!this.active) this.reset(); this.tick(); });
     document.addEventListener('visibilitychange', () => { if (!this.active) this.reset(); else this.tick(); });
   }
@@ -92,6 +92,7 @@ export class ComparisonGraph {
     this.cancelAnalysis(!keepDisplay);
     this.suspended = false;
     this.blocks.clear();
+    this.cache.protected.clear();
     this.key = '';
     this.drawn = '';
     this.error = '';
@@ -110,6 +111,9 @@ export class ComparisonGraph {
       this.reset(this.source === player.source); this.source = player.source; this.key = key;
     }
     this.wanted = start;
+    const horizon = player.playing && (player.ahead < 6 || this.stats.prepareMs > 2000) ? 4 : 12;
+    this.cache.protected = new Set([blob, player.source.file || player.source].flatMap(file =>
+      [0, 4, 8, 12].map(offset => this.cache.key(file, player.rate, start + offset))));
     if (player.playing && (player.buffering || (player.scheduledEnd !== player.totalFrames && player.ahead < (this.suspended ? 4 : 2)))) {
       if (!this.suspended) {
         this.suspended = true; this.stats.pauses++;
@@ -123,7 +127,7 @@ export class ComparisonGraph {
     if (this.suspended) { this.worker?.postMessage({ paused: false }); this.suspended = false; }
     try { player.ensureContext(); }
     catch (error) { this.status.textContent = error.message; return; }
-    for (const time of this.blocks.keys()) if (time !== start && time !== start + 4) this.blocks.delete(time);
+    for (const time of this.blocks.keys()) if (time < start || time > start + horizon) this.blocks.delete(time);
     const label = this.getLabel();
     const current = this.blocks.get(start);
     if (current) {
@@ -149,11 +153,16 @@ export class ComparisonGraph {
     } else {
       this.status.textContent = this.error || 'グラフを準備中（圧縮・再生の準備を優先）…';
     }
-    const next = !current ? start : !this.blocks.has(start + 4) ? start + 4 : player.playing ? -1 : Math.max(start + 8, this.warm);
+    let next = -1;
+    for (let time = start; time <= start + horizon && time < player.source.duration; time += 4) {
+      if (!this.blocks.has(time)) { next = time; break; }
+    }
+    if (next < 0 && !player.playing) next = Math.max(start + horizon + 4, this.warm);
     if (!this.busy && performance.now() >= this.retryAt && next >= 0 && next < player.source.duration) this.prepare(player, next, label);
   }
   async prepare(player, seconds, label) {
     this.busy = true;
+    const begin = performance.now();
     const generation = this.generation, target = player.target;
     const valid = () => generation === this.generation && this.active && this.getPlayer() === player;
     const start = Math.round(seconds * player.rate), frames = Math.min(player.totalFrames - start, player.rate * 4);
@@ -167,8 +176,11 @@ export class ComparisonGraph {
         if (!valid()) return;
         if (cached) { results.push(cached); continue; }
         if (this.suspended) return;
+        const readBegin = performance.now();
         const chunk = await this.readChunk(player, targets[i], start, frames);
+        this.stats.readMs = performance.now() - readBegin;
         if (!valid() || !chunk) return;
+        const fftBegin = performance.now();
         const channels = Array.from({ length: chunk.buffer.numberOfChannels }, (_, ch) =>
           chunk.buffer.getChannelData(ch).slice(start - chunk.start, start - chunk.start + frames));
         this.worker ||= new Worker(new URL('./analysis.js', import.meta.url), { type: 'module' });
@@ -183,14 +195,15 @@ export class ComparisonGraph {
           if (this.suspended) this.worker.postMessage({ paused: true });
         });
         if (!valid() || !result) return;
+        this.stats.fftWallMs = performance.now() - fftBegin;
         this.cancel = null;
-        await this.cache.put(key, result);
-        if (!valid()) return;
+        this.cache.put(key, result);
         results.push(result);
       }
-      if (seconds === this.wanted || seconds === this.wanted + 4) this.blocks.set(seconds, { start: seconds, label, reference: target.reference, position: 0,
+      if (seconds >= this.wanted && seconds <= this.wanted + 12) this.blocks.set(seconds, { start: seconds, label, reference: target.reference, position: 0,
         data: results.length === 1 ? [results[0], results[0]] : [results[1], results[0]] });
       this.warm = Math.max(this.warm, seconds + 4);
+      this.stats.prepareMs = performance.now() - begin;
       this.error = ''; this.failures = 0; this.retryAt = 0;
     } catch (error) {
       if (valid()) {

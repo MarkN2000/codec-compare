@@ -17,12 +17,13 @@ test('公開ビルドでHTML・依存モジュール・FFT Workerの版を揃え
   const version = html.match(/src="\.\/app\.js\?v=([a-f0-9]{12})"/)?.[1];
   assert.ok(version, '入口のJavaScriptに版情報を付ける');
   assert.ok(html.includes(`./style.css?v=${version}`));
-  for (const name of ['app.js', 'audio.js', 'graph.js', 'analysis.js', 'analysis-cache.js']) {
+  for (const name of ['app.js', 'audio.js', 'graph.js', 'analysis.js', 'analysis-cache.js', 'pcm-cache.js', 'pcm-worker.js']) {
     const script = await built(name);
-    for (const match of script.matchAll(/(["'])\.\/(?:model|audio|graph|analysis|analysis-cache)\.js([^"']*)\1/g)) {
+    for (const match of script.matchAll(/(["'])\.\/(?:model|audio|graph|analysis|analysis-cache|pcm-cache|pcm-worker)\.js([^"']*)\1/g)) {
       assert.equal(match[2], `?v=${version}`, `${name}の依存先も同じ版を使う`);
     }
   }
   assert.ok((await built('graph.js')).includes(`new URL('./analysis.js?v=${version}'`), 'FFT Workerも旧キャッシュを使わない');
   assert.ok((await built('graph.js')).includes(`'./analysis-cache.js?v=${version}'`));
+  assert.ok((await built('audio.js')).includes(`new URL('./pcm-worker.js?v=${version}'`), '保存Workerも同じ版を使う');
 });

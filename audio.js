@@ -1,4 +1,5 @@
-import { LIMITS, CODECS, commonFilter, encodeArgs, chunkArgs, samePreview } from './model.js';
+import { LIMITS, CODECS, commonFilter, encodeArgs, chunkArgs, samePreview, needsPCM } from './model.js';
+import { storedPCM } from './pcm-cache.js';
 
 // 各インスタンスは1件ずつ処理する。変換側（グラフ兼用）と再生側の最大2つを動かす。
 export class Engine {
@@ -14,7 +15,8 @@ export class Engine {
         this.onLog?.(message);
       });
       this.ffmpeg.on('progress', ({ time }) => this.onProgress?.(time / 1000000));
-      await this.ffmpeg.load({ coreURL: new URL('./vendor/core/ffmpeg-core.js', import.meta.url).href, wasmURL: new URL('./vendor/core/ffmpeg-core.wasm', import.meta.url).href });
+      const worker = new URL('./pcm-worker.js', import.meta.url).href;
+      await this.ffmpeg.load({ classWorkerURL: worker, coreURL: worker, wasmURL: new URL('./vendor/core/ffmpeg-core.wasm', import.meta.url).href });
       await this.ffmpeg.createDir('/input');
     })();
     return this.loading;
@@ -47,7 +49,9 @@ export class Engine {
     try { await this.run(['-v', 'info', ...inputOptions, '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
     finally { this.onLog = null; }
     if (!frames) throw Error('音声サンプルを読み取れませんでした。');
-    return { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null, frames, duration: frames / rate };
+    const source = { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null, frames, duration: frames / rate };
+    await this.preparePCM(source, { reference: true, blob: file, channels: source.channels });
+    return source;
   }
   async encode(source, config) {
     const codec = CODECS[config.codec], path = `/output.${codec.ext}`;
@@ -63,13 +67,35 @@ export class Engine {
         if (data.length < 18 || new DataView(data.buffer, data.byteOffset, data.byteLength).getUint16(0) !== 0x1ccc) throw Error('LC3の出力ヘッダーが不正です。');
         new DataView(data.buffer, data.byteOffset, data.byteLength).setUint32(14, frames, true);
       }
-      return new Blob([data], { type: codec.mime });
+      const blob = new Blob([data], { type: codec.mime });
+      await this.preparePCM(source, { ...config, blob });
+      return blob;
     } finally { await this.ffmpeg.deleteFile(path).catch(() => {}); }
   }
+  async preparePCM(source, target) {
+    if (this.closed) throw Error('処理を取り消しました。');
+    if (!needsPCM(source, target)) return null;
+    const rate = target.reference ? source.rate : target.rate;
+    // リサンプルの末尾を変えないよう、符号化時のパディングも残す。
+    const frames = Math.ceil(source.duration * rate) + rate;
+    return storedPCM(target.blob, `${rate}:${target.channels}:${Boolean(target.reference)}`, frames * target.channels * 4 + 65536, async file => {
+      await this.mount(target.blob);
+      const progress = this.onProgress;
+      this.onProgress = null;
+      try {
+        if (!await this.ffmpeg.mount('PCM', { file, limit: LIMITS.output }, '/preview')) throw Error('一時PCMの保存を開始できません。');
+        const args = chunkArgs(source, target, 0, frames, rate, '/input/audio', '/preview/audio.wav');
+        args[args.length - 2] = 'wav';
+        await this.run(args);
+      } finally { this.onProgress = progress; await this.ffmpeg.unmount('/preview'); }
+    });
+  }
   async decode(source, target, start, frames, context) {
-    await this.mount(target.blob);
+    const pcm = await this.preparePCM(source, target);
+    if (this.closed) throw Error('処理を取り消しました。');
+    await this.mount(pcm || target.blob);
     try {
-      await this.run(chunkArgs(source, target, start, frames, context.sampleRate));
+      await this.run(chunkArgs(source, pcm ? { codec: 'wav', channels: target.channels } : target, start, frames, context.sampleRate));
       const data = await this.ffmpeg.readFile('/chunk.f32');
       const samples = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
       const received = samples.length / target.channels;
@@ -189,11 +215,12 @@ export class Player {
     start = Math.floor(start / (4 * this.rate)) * 4 * this.rate;
     const frames = Math.min(this.totalFrames - start, Math.round(this.chunkSeconds * this.rate));
     const engine = this.engine, begin = performance.now();
-    const buffer = await engine.decode(this.source, target, start, frames, this.context);
+    const prepared = this.readPrepared?.(target, start, frames);
+    const buffer = prepared?.buffer || await engine.decode(this.source, target, start, frames, this.context);
     if (revision !== this.revision) return null;
     // ponytail: 前回の復号時間だけで調整する。上限16秒。継続的に間に合わない場合は待機する。
-    this.chunkSeconds = Math.max(4, Math.min(16, Math.ceil((performance.now() - begin) / 1000) * 4));
-    const chunk = { key: target.key, start, end: start + frames, buffer };
+    if (!prepared) this.chunkSeconds = Math.max(4, Math.min(16, Math.ceil((performance.now() - begin) / 1000) * 4));
+    const chunk = { key: target.key, start: prepared?.start ?? start, end: prepared?.end ?? start + frames, buffer };
     this.cache.push(chunk);
     return chunk;
   }

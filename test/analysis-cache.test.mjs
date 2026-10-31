@@ -31,22 +31,26 @@ test('1024 FFTは実行間隔を増やさず、小分けでも一致し、集計
 test('分析キャッシュは実体で識別し、保存・復元・期限・容量制限と保存不可を扱う', async () => {
   const previous = globalThis.indexedDB;
   const stores = new Map();
+  let gets = 0, scans = 0, stall = false;
+  const blocked = [];
   // IndexedDBの非同期要求・トランザクション完了を再現し、キャッシュの実処理を通す。
   const db = {
     createObjectStore: name => stores.set(name, new Map()),
     transaction() {
       const tx = { pending: 0, objectStore(name) {
         const map = stores.get(name);
-        const operation = run => {
+        const operation = (run, writing = false) => {
           const req = {}; tx.pending++;
-          queueMicrotask(() => {
+          const finish = () => {
             req.result = structuredClone(run()); req.onsuccess?.();
             if (--tx.pending === 0) queueMicrotask(() => tx.oncomplete?.());
-          }); return req;
+          };
+          if (stall && writing) blocked.push(finish); else queueMicrotask(finish);
+          return req;
         };
-        return { get: key => operation(() => map.get(key)), getAll: () => operation(() => [...map.values()]),
-          put: (value, key = value.key) => operation(() => map.set(key, structuredClone(value)) && key),
-          delete: key => operation(() => { map.delete(key); }) };
+        return { get: key => { gets++; return operation(() => map.get(key)); }, getAll: () => { scans++; return operation(() => [...map.values()]); },
+          put: (value, key = value.key) => operation(() => map.set(key, structuredClone(value)) && key, true),
+          delete: key => operation(() => { map.delete(key); }, true) };
       } }; return tx;
     }, close() {},
   };
@@ -58,20 +62,43 @@ test('分析キャッシュは実体で識別し、保存・復元・期限・�
     assert.match(key, /:1024-v2:/, '以前のFFT結果を再利用しない');
     assert.equal(key, cache.key(blob, 48000, 4));
     assert.notEqual(key, cache.key({}, 48000, 4)); assert.notEqual(key, cache.key(blob, 44100, 4));
-    await cache.put(key, value); assert.equal(await cache.get(key), value);
+    cache.put(key, value); assert.equal(await cache.get(key), value, '保存を待たずに計算結果を使う');
+    const queries = gets;
+    assert.equal(await cache.get('未生成'), null); assert.equal(gets, queries, '未保存の区間はディスク照会しない');
+    await cache.flush();
     cache.memory.clear(); cache.bytes = 0;
     assert.deepEqual(await cache.get(key), value, 'ストレージから型付き配列を復元する');
     assert.equal(cache.stats.storageHits, 1);
     for (const [id, bytes, time] of [['expired', 10, Date.now() - 86400001], ['old', 90 * 1024 ** 2, Date.now() - 2], ['new', 90 * 1024 ** 2, Date.now()]]) {
       stores.get('blocks').set(id, value); stores.get('metadata').set(id, { key: id, bytes, time });
     }
-    await cache.prune(db);
+    await cache.prune(db, 0, true);
     assert.equal(stores.get('blocks').has('expired'), false); assert.equal(stores.get('blocks').has('old'), false);
     assert.equal(stores.get('blocks').has('new'), true);
     assert.ok([...stores.get('metadata').values()].reduce((n, e) => n + e.bytes, 0) <= 128 * 1024 ** 2);
+    const priorScans = scans, priorBatches = cache.stats.batches;
+    for (let i = 0; i < 12; i++) cache.put(`まとめ${i}`, value);
+    await cache.flush();
+    assert.equal(scans, priorScans, '保存のたびに管理情報を全件走査しない');
+    assert.equal(cache.stats.batches - priorBatches, 3, '12件を4件ずつ保存する');
+    stall = true;
+    cache.put('保存中', value);
+    const saving = cache.flush(); await new Promise(setImmediate);
+    cache.memory.clear(); cache.bytes = 0;
+    assert.equal(await cache.get('保存中'), value, '保存中でも待たずに結果を使える');
+    for (let i = 0; i < 50; i++) cache.put(`待ち${i}`, value);
+    assert.ok(cache.pending.size <= 16); assert.ok(cache.stats.dropped > 0, '保存待ちを無制限に増やさない');
+    const newer = { ...value, powers: new Float32Array([.5, .75]) };
+    cache.put('保存中', newer);
+    stall = false; for (const finish of blocked.splice(0)) queueMicrotask(finish);
+    await saving;
+    assert.deepEqual(stores.get('blocks').get('保存中'), newer, '保存中に更新されたキーは新しい結果を残す');
+    assert.equal(cache.diskBytes, [...stores.get('metadata').values()].reduce((n, e) => n + e.bytes, 0), '更新で容量を二重計上しない');
     const large = { powers: new Float32Array(1024 ** 2) };
+    cache.protected.add('近い区間'); cache.remember('近い区間', large);
     for (const k of ['first', 'second', 'third']) cache.remember(k, large);
     assert.equal(cache.memory.has('first'), false); assert.ok(cache.bytes <= 8 * 1024 ** 2);
+    assert.equal(cache.memory.has('近い区間'), true, '遠い区間の生成で近い区間を追い出さない');
     globalThis.indexedDB = { open() { throw Error('保存できない環境'); } };
     const fallback = new AnalysisCache(); await fallback.put('x', value);
     assert.equal(await fallback.get('x'), value); assert.equal(await fallback.get('missing'), null);
@@ -145,4 +172,37 @@ test('グラフ復号はまとめ処理と再利用を行い、遅い実測で�
   context.releaseGraphDecoder(true);
   assert.equal(idle.closed, true, '折りたたみや変換開始では空きWorkerも解放する');
   assert.equal(context.graphDecoder, null);
+  instance.scheduledEnd = 48000 * 8; instance.ahead = 5;
+  assert.equal(await context.readGraphChunk(instance, target, 48000 * 8, 192000), null, '余裕がなければ将来区間の追加復号をしない');
+  instance.ahead = 7;
+  instance.busy = true;
+  assert.equal(await context.readGraphChunk(instance, target, 48000 * 8, 192000), null, '再生側が復号中なら将来区間を重ねて復号しない');
+  instance.busy = false;
+  assert.equal(await context.readGraphChunk(instance, target, 48000 * 4, 192000), null, '予約済み区間は再生PCMを待ち、二重復号しない');
+  const future = await context.readGraphChunk(instance, target, 48000 * 8, 192000);
+  assert.equal(future.end, 48000 * 16, '余裕があるときだけ将来の8秒を準備する');
+  const count = calls.length;
+  assert.equal(await context.readGraphChunk(instance, target, 48000 * 12, 192000), future);
+  assert.equal(calls.length, count);
+});
+
+test('FFT Workerは時間でまとめ、休止・再開しても計算結果を変えない', async () => {
+  const text = await readFile(new URL('../analysis.js', import.meta.url), 'utf8');
+  let clock = 0, stopped = false, result;
+  const waits = [], Scope = class {};
+  const self = new Scope(); self.postMessage = data => { result = data; };
+  const scope = vm.createContext({ WorkerGlobalScope: Scope, self, Float32Array, Float64Array, Uint16Array,
+    performance: { now: () => ++clock }, setTimeout(fn, ms) {
+      waits.push(ms);
+      if (ms === 0 && !stopped) { stopped = true; self.onmessage({ data: { paused: true } }); }
+      else if (ms === 20) self.onmessage({ data: { paused: false } });
+      queueMicrotask(fn);
+    } });
+  vm.runInContext(text.replaceAll('export ', ''), scope);
+  const channels = [Float32Array.from({ length: 48000 * 4 }, (_, i) => Math.sin(i * .05) * .25)];
+  await self.onmessage({ data: { channels: [channels], rate: 48000 } });
+  const expected = compactFrames(spectrumFrames(channels, 48000));
+  for (const field of ['powers', 'bands', 'times', 'weights']) assert.deepEqual(result.results[0][field], expected[field]);
+  assert.ok(waits.includes(20), '途中休止を受け付ける');
+  assert.ok(waits.filter(ms => ms === 0).length <= 4, '固定4窓ごとの待機に戻らない');
 });

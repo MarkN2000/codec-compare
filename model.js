@@ -51,7 +51,7 @@ export function validateConfig(c, source) {
 }
 export function commonFilter(source) {
   // ponytail: aeval は毎サンプル評価。高レートで遅い場合は24 bit量子化専用フィルターへ置換する。
-  return `aformat=channel_layouts=${source.channels === 1 ? 'mono' : 'stereo'},aeval='clip(floor(val(ch)*8388608+0.5),-8388608,8388607)/8388608':c=same`;
+  return `aformat=sample_fmts=dblp:channel_layouts=${source.channels === 1 ? 'mono' : 'stereo'},aeval='clip(floor(val(ch)*8388608+0.5),-8388608,8388607)/8388608':c=same`;
 }
 export function codecDelay(c) {
   if (c.codec === 'lc3') return Math.round(c.rate * (c.frameDuration === 7.5 ? .004 : .0025));
@@ -83,11 +83,14 @@ export function encodeArgs(source, c, input = '/input/audio', output = `/output.
 export function samePreview(c, source) {
   return ['flac', 'wav'].includes(c.codec) && c.rate === source.rate && c.channels === source.channels && c.depth === 24;
 }
+export function needsPCM(source, target) {
+  return ['adpcm', 'g722', 'sbc', 'lc3'].includes(target.codec) || (target.reference && (source.codec?.startsWith('adpcm') || ['sbc', 'lc3'].includes(source.codec)));
+}
 export function chunkArgs(source, target, start, frames, rate, input = '/input/audio', output = '/chunk.f32') {
   // 先頭からの時刻を維持してリサンプルし、整数サンプル位置で切る。シーク前に1秒の助走を取る。
-  // ponytail: ADPCM/WAVや生SBCは先頭から読み捨てて予測状態と時刻を揃える。
-  // 長時間音源では復号コストが増える。改善時は状態付きの区間索引を導入する。
-  const fromStart = ['adpcm', 'g722', 'sbc', 'lc3'].includes(target.codec) || (target.reference && (source.codec?.startsWith('adpcm') || ['sbc', 'lc3'].includes(source.codec)));
+  // ponytail: 一時PCMの作成・保存不可時は先頭から予測状態と時刻を揃える。
+  // 保存不可の環境では後半ほど遅くなる。改善時は状態付きの区間索引を導入する。
+  const fromStart = needsPCM(source, target);
   const seek = fromStart ? 0 : Math.max(0, Math.floor(start / rate) - 1);
   const delay = target.reference ? 0 : codecDelay(target);
   const filters = [target.reference ? commonFilter(source) : '', delay ? `atrim=start_sample=${delay},asetpts=PTS-STARTPTS` : '', `aresample=${rate}`, `atrim=start_sample=${start - seek * rate}:end_sample=${start - seek * rate + frames}`, 'asetpts=PTS-STARTPTS'].filter(Boolean);

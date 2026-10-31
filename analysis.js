@@ -102,7 +102,8 @@ if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScop
         do {
           while (paused) await yieldTask(20);
           const begin = performance.now();
-          step = steps.next(); elapsedMs += performance.now() - begin;
+          do { step = steps.next(); } while (!step.done && performance.now() - begin < 8);
+          elapsedMs += performance.now() - begin;
           if (!step.done) await yieldTask(0);
         } while (!step.done);
         const begin = performance.now();

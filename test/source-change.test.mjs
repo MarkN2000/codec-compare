@@ -18,7 +18,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
     player: player(), makePlayer: player, graph: { reset() {} }, encoder: null, editing: {}, draft: {},
     $: id => { if (!elements.has(id)) elements.set(id, { replaceChildren() {}, append() {}, querySelectorAll: () => [] }); return elements.get(id); },
     document: { createElement: () => ({}) }, render() {}, message() {}, failure: error => errors.push(error.message),
-    sizeLabel: size => String(size), timeLabel: seconds => String(seconds), releaseGraphDecoder: clear => releases.push(clear),
+    sizeLabel: size => String(size), timeLabel: seconds => String(seconds), releaseGraphDecoder: clear => releases.push(clear), clearPCM() {},
     Engine: class {
       constructor() { engines.push(this); this.done = deferred(); }
       analyze(file) { this.file = file; return this.done.promise; }
