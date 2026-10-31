@@ -16,7 +16,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
     patterns: [{ id: 'a', config, state: 'encoding', blob: { size: 99 }, progress: 50, error: '古いエラー' },
       { id: 'b', config: { ...defaults('g711', { rate: 44100, channels: 2 }), law: 'alaw' }, state: 'ready', blob: { size: 88 } }],
     player: player(), makePlayer: player, graph: { reset() {} }, encoder: null, editing: {}, draft: {},
-    $: id => { if (!elements.has(id)) elements.set(id, { replaceChildren() {}, append() {}, querySelectorAll: () => [] }); return elements.get(id); },
+    $: id => { if (!elements.has(id)) elements.set(id, { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); }, querySelectorAll: () => [] }); return elements.get(id); },
     document: { createElement: () => ({}) }, render() {}, message() {}, failure: error => errors.push(error.message),
     sizeLabel: size => String(size), timeLabel: seconds => String(seconds), releaseGraphDecoder: clear => releases.push(clear), clearPCM() {},
     Engine: class {
@@ -31,7 +31,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   }
   const settle = () => new Promise(setImmediate);
   const source = name => ({ file: { name, size: 10 }, rate: 48000, channels: 1, originalChannels: 1, frames: 48000, duration: 1 });
-  const first = source('新しい音源.wav');
+  const first = { ...source('新しい動画.mp4'), hasVideo: true };
   let closedGames = 0;
   context.game = { active: true, close() { if (this.active) { this.active = false; closedGames++; } } };
   const loading = context.loadFile(first.file);
@@ -49,6 +49,7 @@ test('音源変更で設定だけを保持し、解析後の自動変換・失�
   await context.queue(); assert.equal(engines.length, 1, '解析中は変換を始めない');
   context.graphBusy = true;
   engines[0].done.resolve(first); await loading;
+  assert.ok(elements.get('source-info').children.some(span => span.textContent === '入力動画 10'), '動画全体の容量だと分かる表示にする');
   assert.equal(engines[0].closed, true);
   assert.equal(engines[1].source, first, '解析後すぐに新音源を変換');
   assert.equal(context.encoding, true, 'グラフの追加復号より変換を優先する');

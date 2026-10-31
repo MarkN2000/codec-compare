@@ -89,7 +89,7 @@ export function samePreview(c, source) {
   return ['flac', 'wav'].includes(c.codec) && c.rate === source.rate && c.channels === source.channels && c.depth === 24;
 }
 export function needsPCM(source, target) {
-  return ['adpcm', 'g722', 'sbc', 'lc3'].includes(target.codec) || (target.reference && (source.codec?.startsWith('adpcm') || ['sbc', 'lc3'].includes(source.codec)));
+  return ['adpcm', 'g722', 'sbc', 'lc3'].includes(target.codec) || (target.reference && (source.hasVideo || source.codec?.startsWith('adpcm') || ['sbc', 'lc3'].includes(source.codec)));
 }
 export function chunkArgs(source, target, start, frames, rate, input = '/input/audio', output = '/chunk.f32') {
   // 先頭からの時刻を維持してリサンプルし、整数サンプル位置で切る。シーク前に1秒の助走を取る。

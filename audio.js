@@ -40,24 +40,30 @@ export class Engine {
     const inputOptions = /\.sbc$/i.test(file.name || '') ? ['-f', 'sbc'] : [];
     const probe = async (blob, options = []) => {
       await this.mount(blob);
-      await this.run(['-v', 'error', '-select_streams', 'a:0', '-show_streams', '-of', 'json', '-o', '/probe.json', ...options, '/input/audio'], true);
-      try { return JSON.parse(await this.ffmpeg.readFile('/probe.json', 'utf8')).streams?.[0]; }
+      await this.run(['-v', 'error', '-show_streams', '-of', 'json', '-o', '/probe.json', ...options, '/input/audio'], true);
+      try { return JSON.parse(await this.ffmpeg.readFile('/probe.json', 'utf8')).streams || []; }
       finally { await this.ffmpeg.deleteFile('/probe.json'); }
     };
-    const info = await probe(file, inputOptions);
+    let streams;
+    try { streams = await probe(file, inputOptions); }
+    catch { throw Error('読み込めない形式、または破損したファイルです。'); }
+    if (!streams.length) throw Error('読み込めない形式、または破損したファイルです。');
+    const info = streams.find(stream => stream.codec_type === 'audio');
+    if (!info) throw Error('音声が含まれていません。');
     const rate = Number(info?.sample_rate), originalChannels = Number(info?.channels);
     if (!Number.isInteger(rate) || rate < 8000 || rate > 192000 || !Number.isInteger(originalChannels) || originalChannels < 1) throw Error('対応する音声がありません。8～192 kHzの音源を選択してください。');
-    const source = { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, layout: info.channel_layout || null, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null };
+    const source = { file, hasVideo: streams.some(stream => stream.codec_type === 'video' && !stream.disposition?.attached_pic), codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, layout: info.channel_layout || null, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null };
     const pcm = await this.preparePCM(source, { reference: true, blob: file, channels: source.channels });
     let frames = 0;
     if (pcm) {
-      const saved = await probe(pcm);
+      const saved = (await probe(pcm)).find(stream => stream.codec_type === 'audio');
       if (saved?.time_base !== `1/${rate}`) throw Error('一時PCMのサンプル数を取得できませんでした。');
       frames = Number(saved.duration_ts);
     } else {
       await this.mount(file);
       this.onLog = message => { const match = message.match(/\bnb_samples:(\d+)/); if (match) frames += Number(match[1]); };
       try { await this.run(['-v', 'info', ...inputOptions, '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
+      catch { throw Error('読み込めない形式、または破損したファイルです。'); }
       finally { this.onLog = null; }
     }
     if (!Number.isSafeInteger(frames) || frames <= 0) throw Error('音声サンプルを読み取れませんでした。');

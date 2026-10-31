@@ -171,7 +171,7 @@ async function loadFile(file) {
     if (current !== session) return;
     source = result;
     $('source-info').replaceChildren();
-    for (const text of [`${source.rate.toLocaleString()} Hz`, source.bits ? `${source.bits} bit` : '非可逆圧縮', source.originalChannels === 1 ? 'モノラル' : source.originalChannels === 2 ? 'ステレオ' : `${source.originalChannels} ch → ステレオ`, `入力 ${sizeLabel(file.size)}`]) {
+    for (const text of [`${source.rate.toLocaleString()} Hz`, source.bits ? `${source.bits} bit` : '非可逆圧縮', source.originalChannels === 1 ? 'モノラル' : source.originalChannels === 2 ? 'ステレオ' : `${source.originalChannels} ch → ステレオ`, `入力${source.hasVideo ? '動画' : ''} ${sizeLabel(file.size)}`]) {
       const span = document.createElement('span'); span.textContent = text; $('source-info').append(span);
     }
     $('seek').max = source.duration;
@@ -179,7 +179,7 @@ async function loadFile(file) {
     for (const id of ['play', 'seek', 'add']) $(id).disabled = false;
     player.setSource(source);
     message();
-  } catch (error) { if (current === session) { failure(error); $('source-info').textContent = '読み込めませんでした。音源を変更してください。'; } }
+  } catch (error) { if (current === session) { failure(error); $('source-info').textContent = ''; } }
   finally { engine.terminate(); if (encoder === engine) encoder = null; }
   if (current === session && source) queue();
 }
