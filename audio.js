@@ -37,20 +37,31 @@ export class Engine {
   }
   async analyze(file) {
     if (!file.size || file.size > LIMITS.input) throw Error('0バイトのファイル、または512 MiBを超える入力は扱えません。');
-    await this.mount(file);
     const inputOptions = /\.sbc$/i.test(file.name || '') ? ['-f', 'sbc'] : [];
-    await this.run(['-v', 'error', '-select_streams', 'a:0', '-show_streams', '-of', 'json', '-o', '/probe.json', ...inputOptions, '/input/audio'], true);
-    const info = JSON.parse(await this.ffmpeg.readFile('/probe.json', 'utf8')).streams?.[0];
-    await this.ffmpeg.deleteFile('/probe.json');
+    const probe = async (blob, options = []) => {
+      await this.mount(blob);
+      await this.run(['-v', 'error', '-select_streams', 'a:0', '-show_streams', '-of', 'json', '-o', '/probe.json', ...options, '/input/audio'], true);
+      try { return JSON.parse(await this.ffmpeg.readFile('/probe.json', 'utf8')).streams?.[0]; }
+      finally { await this.ffmpeg.deleteFile('/probe.json'); }
+    };
+    const info = await probe(file, inputOptions);
     const rate = Number(info?.sample_rate), originalChannels = Number(info?.channels);
     if (!Number.isInteger(rate) || rate < 8000 || rate > 192000 || !Number.isInteger(originalChannels) || originalChannels < 1) throw Error('対応する音声がありません。8～192 kHzの音源を選択してください。');
+    const source = { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, layout: info.channel_layout || null, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null };
+    const pcm = await this.preparePCM(source, { reference: true, blob: file, channels: source.channels });
     let frames = 0;
-    this.onLog = message => { const match = message.match(/\bnb_samples:(\d+)/); if (match) frames += Number(match[1]); };
-    try { await this.run(['-v', 'info', ...inputOptions, '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
-    finally { this.onLog = null; }
-    if (!frames) throw Error('音声サンプルを読み取れませんでした。');
-    const source = { file, codec: info.codec_name, rate, channels: Math.min(2, originalChannels), originalChannels, layout: info.channel_layout || null, bits: Number(info.bits_per_raw_sample || info.bits_per_sample) || null, frames, duration: frames / rate };
-    await this.preparePCM(source, { reference: true, blob: file, channels: source.channels });
+    if (pcm) {
+      const saved = await probe(pcm);
+      if (saved?.time_base !== `1/${rate}`) throw Error('一時PCMのサンプル数を取得できませんでした。');
+      frames = Number(saved.duration_ts);
+    } else {
+      await this.mount(file);
+      this.onLog = message => { const match = message.match(/\bnb_samples:(\d+)/); if (match) frames += Number(match[1]); };
+      try { await this.run(['-v', 'info', ...inputOptions, '-i', '/input/audio', '-map', '0:a:0', '-vn', '-af', 'ashowinfo', '-f', 'null', '-']); }
+      finally { this.onLog = null; }
+    }
+    if (!Number.isSafeInteger(frames) || frames <= 0) throw Error('音声サンプルを読み取れませんでした。');
+    Object.assign(source, { frames, duration: frames / rate });
     return source;
   }
   async encode(source, config) {
@@ -77,8 +88,8 @@ export class Engine {
     if (!needsPCM(source, target)) return null;
     const rate = target.reference ? source.rate : target.rate;
     // リサンプルの末尾を変えないよう、符号化時のパディングも残す。
-    const frames = Math.ceil(source.duration * rate) + rate;
-    return storedPCM(target.blob, `${rate}:${target.channels}:${Boolean(target.reference)}`, frames * target.channels * 4 + 65536, async file => {
+    const frames = source.duration === undefined ? null : Math.ceil(source.duration * rate) + rate;
+    return storedPCM(target.blob, `${rate}:${target.channels}:${Boolean(target.reference)}`, frames === null ? LIMITS.output : frames * target.channels * 4 + 65536, async file => {
       await this.mount(target.blob);
       const progress = this.onProgress;
       this.onProgress = null;
@@ -305,9 +316,10 @@ export class Player {
         this.emit();
       }
       // 選択中の次区間を先に準備する。切替先の復号で現在の再生を止めない。
-      if (this.scheduledEnd < this.totalFrames && this.cache.filter(c => c.key === this.target.key && c.end > this.frame).length < 2) {
+      const prepared = this.cache.find(c => c.start <= this.scheduledEnd && c.end > this.scheduledEnd);
+      if (this.scheduledEnd < this.totalFrames && (prepared || this.cache.filter(c => c.key === this.target.key && c.end > this.frame).length < 2)) {
         const start = this.scheduledEnd;
-        const chunk = this.cache.find(c => c.start === start && c.key === this.target.key) || await this.decode(this.target, start, revision);
+        const chunk = prepared || await this.decode(this.target, start, revision);
         if (!chunk || revision !== this.revision) return;
         if (this.endTime > this.context.currentTime + 0.01) this.schedule(chunk, start, this.endTime);
         else {

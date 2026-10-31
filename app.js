@@ -34,6 +34,7 @@ async function readGraphChunk(instance, target, start, frames) {
     patterns.some(p => p.state === 'queued') || instance.requested || !instance.canEncode ||
     (instance.playing && instance.ahead < 4 && instance.scheduledEnd !== instance.totalFrames)) return null;
   const engine = graphDecoder ||= new Engine();
+  engine.previewBlob = target.blob;
   const revision = instance.revision;
   graphBusy = true;
   try {
@@ -215,6 +216,17 @@ function openEditor(pattern = null) {
   fields();
   $('fields').querySelector('select').focus();
 }
+function discardPreview(pattern) {
+  const selected = [playback.selected, playback.pending].includes(pattern.id);
+  if (selected) { player.pause(); player.select(null); }
+  if (pattern.state === 'encoding') encoder?.terminate();
+  if (pattern.blob) {
+    const retained = graphChunks.filter(c => c.blob !== pattern.blob);
+    if (selected || graphDecoder?.previewBlob === pattern.blob) graph.cancelAnalysis();
+    graphChunks = retained;
+    clearPCM(pattern.blob);
+  }
+}
 function act(action, pattern) {
   if (action === 'edit') { openEditor(pattern); return; }
   if (action === 'download') {
@@ -225,9 +237,7 @@ function act(action, pattern) {
     setTimeout(() => URL.revokeObjectURL(url), 30000);
     return;
   }
-  if ([playback.selected, playback.pending].includes(pattern.id)) { player.pause(); player.select(null); }
-  if (pattern.state === 'encoding') encoder?.terminate();
-  if (pattern.blob) clearPCM(pattern.blob);
+  discardPreview(pattern);
   patterns = patterns.filter(p => p !== pattern);
   if (editing === pattern) closeEditor();
   render();
@@ -275,9 +285,7 @@ $('editor').addEventListener('submit', event => {
   try {
     validateConfig(draft, source);
     if (editing) {
-      if ([playback.selected, playback.pending].includes(editing.id)) { player.pause(); player.select(null); }
-      if (editing.state === 'encoding') encoder?.terminate();
-      if (editing.blob) clearPCM(editing.blob);
+      discardPreview(editing);
       Object.assign(editing, { config: { ...draft }, state: 'queued', blob: null, error: null, progress: 0 });
     } else patterns.push({ id: crypto.randomUUID(), config: { ...draft }, state: 'queued' });
     closeEditor(); message(); render(); queue();

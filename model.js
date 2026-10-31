@@ -68,7 +68,7 @@ export function encodeArgs(source, c, input = '/input/audio', output = `/output.
   const codec = CODECS[c.codec];
   const delay = codecDelay(c), padding = delay + (c.codec === 'sbc' ? 127 : 0);
   const filter = commonFilter(source) + (delay && c.codec !== 'lc3' ? `,aresample=${c.rate},apad=pad_len=${padding}` : '');
-  const args = ['-v', 'error', '-i', input, '-map', '0:a:0', '-vn', '-map_metadata', '-1', '-af', filter, '-ar', String(c.rate), '-ac', String(c.channels), '-c:a', c.codec === 'g711' ? `pcm_${c.law}` : codec.encoder || `pcm_s${c.depth}le`];
+  const args = ['-v', 'error', ...(source.codec === 'sbc' ? ['-f', 'sbc'] : []), '-i', input, '-map', '0:a:0', '-vn', '-map_metadata', '-1', '-af', filter, '-ar', String(c.rate), '-ac', String(c.channels), '-c:a', c.codec === 'g711' ? `pcm_${c.law}` : codec.encoder || `pcm_s${c.depth}le`];
   if (c.codec === 'opus') args.push('-b:a', `${c.bitrate}k`, '-vbr', c.mode === 'VBR' ? 'on' : 'off');
   if (c.codec === 'mp3') args.push(...(c.mode === 'VBR' ? ['-q:a', String(c.quality)] : ['-b:a', `${c.bitrate}k`]));
   if (c.codec === 'aac') args.push('-b:a', `${c.bitrate}k`);
@@ -98,7 +98,7 @@ export function chunkArgs(source, target, start, frames, rate, input = '/input/a
   const fromStart = needsPCM(source, target);
   const seek = fromStart ? 0 : Math.max(0, Math.floor(start / rate) - 1);
   const delay = target.reference ? 0 : codecDelay(target);
-  const filters = [target.reference ? commonFilter(source) : '', delay ? `atrim=start_sample=${delay},asetpts=PTS-STARTPTS` : '', `aresample=${rate}`, `atrim=start_sample=${start - seek * rate}:end_sample=${start - seek * rate + frames}`, 'asetpts=PTS-STARTPTS'].filter(Boolean);
+  const filters = [target.reference ? commonFilter(source) : '', delay ? `atrim=start_sample=${delay},asetpts=PTS-STARTPTS` : '', `aresample=${rate}`, frames === null ? '' : `atrim=start_sample=${start - seek * rate}:end_sample=${start - seek * rate + frames}`, 'asetpts=PTS-STARTPTS'].filter(Boolean);
   // atrimで必要数を切り出す。-tを重ねるとフレーム時刻の揺れで末尾が欠ける。
   return ['-v', 'error', ...(fromStart ? [] : ['-ss', String(seek)]), ...((target.reference ? source.codec : target.codec) === 'sbc' ? ['-f', 'sbc'] : []), '-i', input, '-map', '0:a:0', '-vn', '-af', filters.join(','), '-ac', String(target.channels), '-c:a', 'pcm_f32le', '-f', 'f32le', output];
 }

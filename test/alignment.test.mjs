@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { encodeArgs, defaults, chunkArgs } from '../model.js';
 import { spectrumFrames, FFT_SIZE } from '../analysis.js';
-import { frameBandDifferences } from '../graph.js';
+import { bandDifference } from '../graph.js';
 
 // 波形の平均音量では検出できない1サンプルのずれも検査する。
 function bestLag(reference, selected, start, count = 4096) {
@@ -92,7 +92,10 @@ test('44.1/48 kHzの実WASM復号で周波数・位置・FFT窓を照合する',
           for (let ch = 0; ch < 2; ch++) for (let i = 0; i < frames; i++) maxPcmError = Math.max(maxPcmError, Math.abs(a[ch][i] - control[ch][i]));
           for (const hz of [50, 500, 1000, 5000, 10000]) {
             const bin = Math.round(hz * FFT_SIZE / rate);
-            for (const db of frameBandDifferences(fftA, controlFft, bin, bin + 1)) maxDbError = Math.max(maxDbError, Math.abs(db));
+            for (let row = 0; row < fftA.times.length; row++) {
+              const index = row * fftA.bins + bin;
+              maxDbError = Math.max(maxDbError, Math.abs(bandDifference(fftA.powers[index], controlFft.powers[index])));
+            }
           }
           assert.ok(maxPcmError < 2e-7, '圧縮なしの48 kHz対照とサンプル単位で一致');
           assert.ok(maxDbError < .01, `可逆対照の差分グラフが0 dBに戻る: ${maxDbError}`);

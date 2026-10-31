@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spectrumFrames, compactFrames, spectrumSteps, FFT_SIZE } from '../analysis.js';
-import { melAt, melPosition, timePosition, fftColumns, averageSpectrum, bandDifference, frameBandDifferences, differenceColor, ComparisonGraph } from '../graph.js';
+import { melAt, melPosition, timePosition, fftColumns, averageSpectrum, bandDifference, differenceColor, ComparisonGraph } from '../graph.js';
 import { Player } from '../audio.js';
 
 test('周波数とdBFSを校正し、逆位相ステレオ・無音・短い音源を扱う', () => {
@@ -105,17 +105,6 @@ test('差分の符号・無音マスク・色相・表示上限', () => {
   assert.equal(neutral[0], neutral[2]);
 });
 
-test('差分はFFT窓ごとに計算し、隣の窓へ変化を広げない', () => {
-  const data = powers => ({ times: Float32Array.from([0, .1, .2, .3, .4]), bins: 1, powers: Float32Array.from(powers) });
-  const reference = data([1, 1, 1, 1, 1]);
-  const changing = data([1, 1, 2, 1, 1]);
-  const differences = frameBandDifferences(reference, changing, 0, 1);
-  assert.ok(Math.abs(differences[2] - 3.0103) < .001);
-  for (const row of [0, 1, 3, 4]) assert.equal(differences[row], 0, '前後の窓へにじませない');
-  const louder = data([2, 2, 2, 2, 2]);
-  for (const db of frameBandDifferences(reference, louder, 0, 1)) assert.ok(Math.abs(db - 3.0103) < .001, '約+3 dBを正規化で消さない');
-});
-
 test('差分画像と再生位置の線はFFTの実時刻を同じ横座標へ対応させる', () => {
   for (const rate of [44100, 48000]) for (const length of [100, Math.round(rate * .53), rate * 4]) {
     const data = spectrumFrames([new Float32Array(length)], rate), duration = length / rate;
@@ -159,7 +148,7 @@ test('メル尺度の差分画像は約0.1秒×64帯域に集計する', () => {
   try {
     const reference = { rate: 48000, length: 48000, times: [.5], bins: 2049, powers: new Float32Array(2049).fill(1) };
     const selected = { ...reference, powers: Float32Array.from({ length: 2049 }, (_, bin) => 10 ** (bin / 2048 * 2.4)) };
-    ComparisonGraph.prototype.heatmap([reference, selected], 1);
+    ComparisonGraph.prototype.heatmap([compactFrames(reference), compactFrames(selected)], 1);
     assert.equal(canvas.height, 64);
     for (const y of [0, 16, 32, 48, 63]) {
       const melMin = 2595 * Math.log10(1 + 20 / 700), melMax = 2595 * Math.log10(1 + 24000 / 700);
@@ -172,19 +161,19 @@ test('メル尺度の差分画像は約0.1秒×64帯域に集計する', () => {
     }
     const short = { rate: 48000, length: 9600, times: [.025, .075, .125, .175], bins: 65, powers: new Float32Array(65 * 4).fill(1) };
     const changing = { ...short, powers: Float32Array.from({ length: 65 * 4 }, (_, i) => i >= 65 && i < 130 ? 9 : 1) };
-    ComparisonGraph.prototype.heatmap([short, changing]);
+    ComparisonGraph.prototype.heatmap([compactFrames(short), compactFrames(changing)]);
     assert.equal(canvas.width, 2, '0.2秒を2列に集計');
     assert.deepEqual([...pixels.slice(0, 3)], differenceColor(10 * Math.log10(5)), 'dB値や色ではなくパワーを平均する');
     assert.deepEqual([...pixels.slice(4, 7)], differenceColor(0), '変化を隣の時間マスへ広げない');
     const tiny = { ...short, length: 100, times: [50 / 48000], powers: new Float32Array(65).fill(1) };
-    ComparisonGraph.prototype.heatmap([tiny, tiny]);
+    ComparisonGraph.prototype.heatmap([compactFrames(tiny), compactFrames(tiny)]);
     assert.equal(canvas.width, 1);
     assert.deepEqual([...pixels.slice(0, 3)], differenceColor(0), '短い末尾も表示する');
     const sparse = { ...short, times: [.05], powers: new Float32Array(65).fill(1) };
-    ComparisonGraph.prototype.heatmap([sparse, sparse]);
+    ComparisonGraph.prototype.heatmap([compactFrames(sparse), compactFrames(sparse)]);
     assert.deepEqual([...pixels.slice(4, 7)], differenceColor(0), 'FFT窓がないマスは最も近い窓を使う');
     const full = { ...short, length: 48000 * 4 };
-    ComparisonGraph.prototype.heatmap([full, full]);
+    ComparisonGraph.prototype.heatmap([compactFrames(full), compactFrames(full)]);
     assert.equal(canvas.width, 40, '4秒でも40列だけ保持する');
   } finally { globalThis.document = previousDocument; }
 });
@@ -221,7 +210,7 @@ test('2つのグラフは同じFFT結果と位置を描き、差分画像を再�
   globalThis.document = { createElement() { images++; return canvas(); } };
   globalThis.window = { devicePixelRatio: 1 };
   try {
-    const data = spectrumFrames([new Float32Array(48000 * 4)], 48000);
+    const data = compactFrames(spectrumFrames([new Float32Array(48000 * 4)], 48000));
     const graph = Object.create(ComparisonGraph.prototype);
     graph.frequencyCanvas = canvas(); graph.canvas = canvas();
     graph.status = { textContent: '4.0–8.0 秒' };

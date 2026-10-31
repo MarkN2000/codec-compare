@@ -10,7 +10,7 @@ import { storedPCM, clearPCM } from '../pcm-cache.js';
 test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共有・上限・削除・保存失敗を扱う', async t => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   const files = new Map(), held = [], writes = [], warnings = [], warn = console.warn;
-  let deny = false;
+  let deny = false, quota = false;
   const dir = {
     async *entries() { yield* files.entries(); },
     async removeEntry(name) { assert.ok(!files.get(name)?.locked, '書込み終了後に削除する'); files.delete(name); },
@@ -23,7 +23,7 @@ test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共�
           assert.equal(state.locked, false); state.locked = true;
           return {
             truncate(length) { state.parts = []; state.length = length; },
-            write(buffer, { at }) { state.parts.push({ at, bytes: buffer.slice() }); state.length = Math.max(state.length, at + buffer.length); return buffer.length; },
+            write(buffer, { at }) { if (quota) throw Object.assign(Error('空き容量なし'), { name: 'QuotaExceededError' }); state.parts.push({ at, bytes: buffer.slice() }); state.length = Math.max(state.length, at + buffer.length); return buffer.length; },
             flush() {}, close() { state.locked = false; },
           };
         },
@@ -56,8 +56,8 @@ test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共�
     scope.pipePCM(core.FS, { write: () => 0 }, '/short', 100);
     assert.throws(() => core.FS.writeFile('/short', new Uint8Array(5)), { errno: 29 });
     core.FS.unlink('/short');
-    let logs = [], output;
-    core.setLogger(({ message }) => logs.push(message));
+    let logs = [], output, engine;
+    core.setLogger(({ message }) => { logs.push(message); engine?.onLog?.(message); });
     const run = args => { logs = []; core.exec(...args); const ret = core.ret; core.reset(); assert.equal(ret, 0, logs.slice(-4).join('\n')); };
     core.FS.mkdir('/input');
     const source = { rate: 44100, channels: 2, frames: 44100 * 9 + 123, file: {}, codec: 'pcm_s16le' };
@@ -70,11 +70,15 @@ test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共�
     core.exec('-v', 'error', '-i', '/source.wav', '-c:a', 'pcm_f32le', '-f', 'wav', '/quota');
     assert.equal(core.ret, 1, '容量不足をWASM外への例外にせず、FFmpegが後始末して終了する');
     core.reset(); core.FS.unlink('/quota');
-    const engine = new Engine();
+    engine = new Engine();
     engine.mount = async blob => { core.FS.writeFile('/input/audio', new Uint8Array(await blob.arrayBuffer())); };
-    engine.run = async args => { writes.push(args); run(args); };
+    engine.run = async (args, probe = false) => {
+      writes.push(args);
+      if (probe) { core.ffprobe(...args); core.reset(); }
+      else run(args);
+    };
     engine.ffmpeg = {
-      readFile: async path => core.FS.readFile(path), deleteFile: async path => core.FS.unlink(path),
+      readFile: async (path, encoding) => encoding === 'utf8' ? new TextDecoder().decode(core.FS.readFile(path)) : core.FS.readFile(path), deleteFile: async path => core.FS.unlink(path),
       async mount(type, { file, limit }) {
         assert.equal(type, 'PCM'); output = await file.createSyncAccessHandle(); output.truncate(0);
         core.FS.mkdir('/preview'); scope.pipePCM(core.FS, output, '/preview/audio.wav', limit); return true;
@@ -92,6 +96,25 @@ test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共�
       const config = defaults(codec, source);
       core.FS.writeFile('/input/audio', core.FS.readFile('/source.wav'));
       const blob = await engine.encode(source, config), target = { ...config, blob };
+      const input = new File([blob], `input.${CODECS[codec].ext}`);
+      await engine.mount(input);
+      run(['-v', 'info', ...(codec === 'sbc' ? ['-f', 'sbc'] : []), '-i', '/input/audio', '-af', 'ashowinfo', '-f', 'null', '-']);
+      const expectedFrames = logs.reduce((n, line) => n + Number(line.match(/\bnb_samples:(\d+)/)?.[1] || 0), 0);
+      const beforeAnalyze = writes.length;
+      const analyzed = await engine.analyze(input);
+      assert.equal(analyzed.frames, expectedFrames, `${codec}の保存PCMヘッダーから元と同じサンプル数を取得`);
+      assert.equal(analyzed.duration, expectedFrames / config.rate);
+      assert.equal(writes.slice(beforeAnalyze).filter(args => args.includes('-i')).length, 1, '入力の全量復号は保存の1回だけ');
+      assert.ok(!writes.slice(beforeAnalyze).some(args => args.includes('ashowinfo')), '全量の読み捨て計測をしない');
+      const beforeReuse = writes.length;
+      assert.equal((await engine.analyze(input)).frames, expectedFrames);
+      assert.equal(writes.slice(beforeReuse).filter(args => args.includes('-i')).length, 0, '保存済み入力の再解析でも復号し直さない');
+      assert.ok((await engine.encode(analyzed, defaults('opus', analyzed))).size > 0, `${codec}入力の解析後も別形式へ変換できる`);
+      const simultaneous = new File([blob], `another.${CODECS[codec].ext}`), beforeNext = writes.length;
+      assert.equal((await engine.analyze(simultaneous)).frames, expectedFrames);
+      assert.ok(!writes.slice(beforeNext).some(args => args.includes('ashowinfo')), '完了した保存は実容量で計上し、別入力の予約を妨げない');
+      await clearPCM(simultaneous);
+      await clearPCM(input);
       const first = await engine.preparePCM(source, target);
       const before = writes.length;
       assert.equal(await engine.preparePCM(source, target), first, '準備済みPCMを共有する');
@@ -113,6 +136,18 @@ test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共�
       await clearPCM(blob);
       t.diagnostic(`${codec}: 2レート×3位置で、先頭からの復号と一致`);
     }
+    const sbcConfig = defaults('sbc', source);
+    const fallbackBlob = await engine.encode(source, sbcConfig);
+    const fallbackInput = new File([fallbackBlob], 'fallback.sbc');
+    quota = true;
+    const beforeFailure = writes.length;
+    const failedAnalysis = await engine.analyze(fallbackInput);
+    quota = false;
+    assert.ok(failedAnalysis.frames > 0);
+    assert.equal(writes.slice(beforeFailure).filter(args => args.includes('ashowinfo')).length, 1, '保存失敗時だけ従来の計測へ戻る');
+    const measured = await engine.analyze(fallbackInput);
+    assert.equal(measured.frames, failedAnalysis.frames, '途中で失敗した保存のサンプル数を混ぜない');
+    await clearPCM(fallbackInput); await clearPCM(fallbackBlob);
     // 入力が対象形式の場合は、基準の24 bit量子化も保存時に一度だけ適用する。
     const config = defaults('sbc', source);
     core.FS.writeFile('/input/audio', core.FS.readFile('/source.wav'));
@@ -136,7 +171,7 @@ test('一時PCMを直接保存し、実WASMの区間復号と一致させ、共�
     assert.equal(await storedPCM(failed, '失敗', 1000, () => assert.fail('失敗を毎区間繰り返さない')), null);
     await clearPCM();
     assert.deepEqual([...files.keys()], [active]);
-    assert.equal(warnings.length, 1);
+    assert.equal(warnings.length, 2);
   } finally {
     console.warn = warn;
     if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor); else delete globalThis.navigator;

@@ -40,6 +40,7 @@ export async function storedPCM(blob, key, bytes, write) {
       await write(handle);
       const file = await handle.getFile();
       if (file.size < 44 || file.size > bytes) throw Error('一時PCMのサイズが不正です。');
+      entry.bytes = file.size;
       return file;
     } catch (error) {
       entry.bytes = 0;

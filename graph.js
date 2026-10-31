@@ -25,20 +25,6 @@ export function bandDifference(reference, selected) {
   return Math.max(-24, Math.min(24, 10 * Math.log10(Math.max(1e-12, selected) / Math.max(1e-12, reference))));
 }
 
-export function frameBandDifferences(reference, selected, a, b) {
-  const rows = reference.times.length;
-  const result = new Float32Array(rows);
-  for (let row = 0; row < rows; row++) {
-    let p = 0, q = 0;
-    for (let bin = a; bin < b; bin++) {
-      p += reference.powers[row * reference.bins + bin];
-      q += selected.powers[row * selected.bins + bin];
-    }
-    result[row] = bandDifference(p / (b - a), q / (b - a));
-  }
-  return result;
-}
-
 export function timePosition(seconds, duration) { return Math.max(0, Math.min(1, seconds / duration)); }
 
 export function fftColumns(data, width) {
@@ -307,42 +293,10 @@ export class ComparisonGraph {
     const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = 64;
     const ctx = canvas.getContext('2d'), image = ctx.createImageData(canvas.width, canvas.height);
     const columns = fftColumns(reference, width);
-    if (reference.bands && selected.bands) {
-      for (let y = 0; y < 64; y++) for (let x = 0; x < width; x++) {
-        const index = columns[x] * 64 + 63 - y;
-        const color = differenceColor(bandDifference(reference.bands[index], selected.bands[index]));
-        image.data.set([...color, 255], (y * width + x) * 4);
-      }
-      ctx.putImageData(image, 0, 0); return canvas;
-    }
-    for (let y = 0; y < canvas.height; y++) {
-      const maxHz = reference.rate / 2, step = maxHz / (reference.bins - 1);
-      const a = Math.min(reference.bins - 1, Math.max(1, Math.round(melAt(1 - (y + 1) / canvas.height, maxHz) / step)));
-      const b = Math.min(reference.bins, Math.max(a + 1, Math.round(melAt(1 - y / canvas.height, maxHz) / step)));
-      let row = 0;
-      for (let x = 0; x < canvas.width; x++) {
-        const end = (x + 1) / width * reference.length / reference.rate;
-        let p = 0, q = 0, count = 0;
-        while (row < reference.times.length && reference.times[row] < end) {
-          for (let bin = a; bin < b; bin++) {
-            p += reference.powers[row * reference.bins + bin];
-            q += selected.powers[row * selected.bins + bin];
-          }
-          count++; row++;
-        }
-        if (!count) {
-          for (let bin = a; bin < b; bin++) {
-            p += reference.powers[columns[x] * reference.bins + bin];
-            q += selected.powers[columns[x] * selected.bins + bin];
-          }
-          count = 1;
-        }
-        const samples = count * (b - a);
-        const color = differenceColor(bandDifference(p / samples, q / samples));
-        const offset = (y * canvas.width + x) * 4;
-        for (let c = 0; c < 3; c++) image.data[offset + c] = color[c];
-        image.data[offset + 3] = 255;
-      }
+    for (let y = 0; y < 64; y++) for (let x = 0; x < width; x++) {
+      const index = columns[x] * 64 + 63 - y;
+      const color = differenceColor(bandDifference(reference.bands[index], selected.bands[index]));
+      image.data.set([...color, 255], (y * width + x) * 4);
     }
     ctx.putImageData(image, 0, 0); return canvas;
   }
